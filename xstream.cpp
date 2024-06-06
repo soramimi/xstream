@@ -10,9 +10,10 @@ public:
 	enum StateType {
 		None,
 		Error,
-		Characters,
+		Comment,
 		BeginElement,
 		EndElement,
+		Characters,
 	};
 private:
 	char const *begin_ = nullptr;
@@ -22,7 +23,7 @@ private:
 	StateType state_ = None;
 	bool next_end_element_ = false;
 	std::string_view element_name_;
-	std::string_view characters_;
+	std::vector<char> characters_;
 	std::vector<std::pair<std::string_view, std::string_view>> attributes_;
 	bool issymf(char c)
 	{
@@ -53,7 +54,7 @@ private:
 	}
 	void init()
 	{
-		ptr_ = chars_ = begin_;
+		ptr_ = begin_;
 	}
 	std::string decode_string(std::string_view const &s) const
 	{
@@ -94,6 +95,10 @@ private:
 		}
 		return std::string(vec.data(), vec.size());
 	}
+	std::string decode_string(std::vector<char> const &s) const
+	{
+		return decode_string(std::string_view(s.data(), s.size()));
+	}
 public:
 	xstream(char const *begin, char const *end)
 	{
@@ -111,6 +116,10 @@ public:
 
 	bool next()
 	{
+		if (!chars_) {
+			characters_.clear();
+			chars_ = ptr_;
+		}
 		if (next_end_element_) {
 			next_end_element_ = false;
 			state_ = EndElement;
@@ -118,7 +127,30 @@ public:
 		}
 		if (ptr_ < end_ && *ptr_ == '<') {
 			ptr_++;
+			characters_.clear();
 			char start = 0;
+			if (ptr_ + 3 < end_ && memcmp(ptr_, "!--", 3) == 0) {
+				ptr_ += 3;
+				char const *left = ptr_;
+				while (ptr_ + 2 < end_ && memcmp(ptr_, "-->", 3) != 0) {
+					ptr_++;
+				}
+				characters_.insert(characters_.end(), left, ptr_);
+				ptr_ += 3;
+				state_ = Comment;
+				return true;
+			}
+			if (ptr_ + 8 < end_ && memcmp(ptr_, "![CDATA[", 8) == 0) {
+				ptr_ += 8;
+				char const *left = ptr_;
+				while (ptr_ + 2 < end_ && memcmp(ptr_, "]]>", 3) != 0) {
+					ptr_++;
+				}
+				characters_.insert(characters_.end(), left, ptr_);
+				ptr_ += 3;
+				chars_ = nullptr;
+				return true;
+			}
 			if (ptr_ < end_ && (*ptr_ == '/' || *ptr_ == '!' || *ptr_ == '?')) {
 				start = *ptr_++;
 			}
@@ -191,7 +223,7 @@ public:
 				}
 				if (ptr_ < end_ && *ptr_ == '>') {
 					ptr_++;
-					chars_ = ptr_;
+					chars_ = nullptr;
 					state_ = (start == '/') ? EndElement : BeginElement;
 					return true;
 				}
@@ -205,7 +237,7 @@ public:
 				       c = (unsigned char)*ptr_;
 				}
 		 		if (c == '<' || c == -1) {
-					characters_ = std::string_view(chars_, ptr_ - chars_);
+					characters_.insert(characters_.end(), chars_, ptr_);
 					state_ = Characters;
 					return true;
 				}
@@ -251,7 +283,7 @@ public:
 
 int main()
 {
-	std::string xml = "<hoge><fuga foo='bar'>&lt;Hello,&amp; world&gt;</fuga></hoge>";
+	std::string xml = "<hoge><fuga foo='bar'>{<![CDATA[&lt;Hello,&amp; world&gt;]]>|<![CDATA[&lt;Hello,&amp; world&gt;]]>}|<!--comment--></fuga></hoge>";
 	
 	xstream x(xml);
 	while (x.next()) {

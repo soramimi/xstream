@@ -28,6 +28,8 @@ private:
 	std::string_view element_name_;
 	std::vector<char> characters_;
 	std::vector<std::pair<std::string_view, std::string_view>> attributes_;
+	std::vector<std::string> paths_;
+	std::string current_path_;
 	bool issymf(char c)
 	{
 		int d = (unsigned char)c;
@@ -54,10 +56,6 @@ private:
 			return issymf(c);
 		}
 		return true;
-	}
-	void init()
-	{
-		ptr_ = begin_;
 	}
 	std::string decode_string(std::string_view const &s) const
 	{
@@ -102,23 +100,37 @@ private:
 	{
 		return decode_string(std::string_view(s.data(), s.size()));
 	}
-public:
-	xstream(char const *begin, char const *end)
+	void init(char const *begin, char const *end)
 	{
 		begin_ = begin;
 		end_ = end;
-		init();
+		ptr_ = begin_;
+		paths_.clear();
+		current_path_ = "/";
+	}
+public:
+	xstream(char const *begin, char const *end)
+	{
+		init(begin, end);
 	}
 	
 	xstream(std::string_view const &s)
 	{
 		begin_ = s.data();
 		end_ = s.data() + s.size();
-		init();
+		init(begin_, end_);
 	}
 
 	bool next()
 	{
+		if (state_ == EndElement) {
+			if (paths_.empty()) {
+				current_path_ = "/";
+			} else {
+				current_path_ = paths_.back();
+				paths_.pop_back();
+			}
+		}
 		while (1) {
 			if (!chars_) {
 				characters_.clear();
@@ -155,10 +167,12 @@ public:
 				}
 				char start = 0;
 				characters_.clear();
-				if (ptr_ < end_ && (*ptr_ == '/' || *ptr_ == '!' || *ptr_ == '?')) {
+				if (ptr_ < end_ && *ptr_ == '?') {
+					start = *ptr_;
+				} else if (ptr_ < end_ && (*ptr_ == '/' || *ptr_ == '!')) {
 					start = *ptr_++;
 				}
-				if (ptr_ < end_ && issymf(*ptr_)) {
+				if (ptr_ < end_ && (issymf(*ptr_) || *ptr_ == '?')) {
 					char const *left = ptr_++;
 					while (ptr_ < end_ && issym(*ptr_)) {
 						ptr_++;
@@ -193,7 +207,7 @@ public:
 									} else {
 										ptr_++;
 									}
-								} else if (*ptr_ == quote || isspace((unsigned char)*ptr_) || *ptr_ == '>' || *ptr_ == '/') {
+								} else if (quote != 0 ? (*ptr_ == quote) : (isspace((unsigned char)*ptr_) || *ptr_ == '>' || *ptr_ == '/')) {
 									if (*ptr_ == quote) {
 										ptr_++;
 									}
@@ -231,7 +245,20 @@ public:
 					if (ptr_ < end_ && *ptr_ == '>') {
 						ptr_++;
 						chars_ = nullptr;
-						state_ = (start == '/') ? EndElement : BeginElement;
+						if (start == '/') {
+							state_ = EndElement;
+						} else {
+							if (start == '?') {
+								current_path_ = '/' + std::string(element_name_);
+							} else if (paths_.empty()) {
+								paths_.push_back("/");
+								current_path_ = '/' + std::string(element_name_);
+							} else {
+								paths_.push_back(current_path_);
+								current_path_ = current_path_  + '/' + std::string(element_name_);
+							}
+							state_ = BeginElement;
+						}
 						return true;
 					}
 				}
@@ -269,6 +296,10 @@ public:
 	StateType state() const
 	{
 		return state_;
+	}
+	std::string path() const
+	{
+		return current_path_;
 	}
 	std::string text() const
 	{

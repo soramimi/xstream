@@ -2,4 +2,8 @@ TARGET = xstream
 TEMPLATE = app
 CONFIG += console
 
-SOURCES += xstream.cpp
+SOURCES += \
+	main.cpp
+
+HEADERS += \
+	xstream.h

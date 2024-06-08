@@ -45,7 +45,7 @@ int main()
 		case xstream::Characters:
 			printf("Characters: %s\n", std::string(x.text()).c_str());
 			break;
-		case xstream::BeginElement:
+		case xstream::StartElement:
 			printf("BeginElement: %s\n", std::string(x.text()).c_str());
 			{
 				auto attrs = x.attributes();

@@ -14,7 +14,7 @@ public:
 		None,
 		Error,
 		Comment,
-		BeginElement,
+		StartElement,
 		EndElement,
 		Characters,
 	};
@@ -257,7 +257,7 @@ public:
 								paths_.push_back(current_path_);
 								current_path_ = current_path_  + '/' + std::string(element_name_);
 							}
-							state_ = BeginElement;
+							state_ = StartElement;
 						}
 						return true;
 					}
@@ -277,7 +277,7 @@ public:
 					if (c == '<') {
 						characters_.insert(characters_.end(), chars_, ptr_);
 						if (ptr_ + 1 < end_ && (ptr_[1] == '/' || ptr_[1] == '!')) {
-							if (state_ == BeginElement || state_ == Characters) {
+							if (state_ == StartElement || state_ == Characters) {
 								chars_ = nullptr;
 								state_ = Characters;
 								return true;
@@ -301,10 +301,19 @@ public:
 	{
 		return current_path_;
 	}
+	bool match(char const *path) const
+	{
+		if (strncmp(path, current_path_.c_str(), current_path_.size()) == 0) {
+			if (path[current_path_.size()] == 0) {
+				return true;
+			}
+		}
+		return false;
+	}
 	std::string text() const
 	{
 		switch (state()) {
-		case BeginElement:
+		case StartElement:
 		case EndElement:
 			return std::string(element_name_);
 		case Characters:

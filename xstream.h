@@ -302,6 +302,18 @@ public:
 	{
 		return state_;
 	}
+	bool isStartElement() const
+	{
+		return state() == StartElement;
+	}
+	bool isEndElement() const
+	{
+		return state() == EndElement;
+	}
+	bool isCharacters() const
+	{
+		return state() == Characters;
+	}
 	std::string path() const
 	{
 		return current_path_;

@@ -41,22 +41,12 @@ int main()
 
 	xstream x(xml);
 	while (x.next()) {
-		switch (x.state()) {
-		case xstream::Characters:
+		if (x.isCharacters()) {
 			printf("Characters: %s\n", std::string(x.text()).c_str());
-			break;
-		case xstream::StartElement:
-			printf("BeginElement: %s\n", std::string(x.text()).c_str());
-			{
-				auto attrs = x.attributes();
-				for (auto const &attr : attrs) {
-					printf("  Attribute: %s = %s\n", attr.first.c_str(), attr.second.c_str());
-				}
-			}
-			break;
-		case xstream::EndElement:
+		} else if (x.isStartElement()) {
+			printf("StartElement: %s\n", std::string(x.text()).c_str());
+		} else if (x.isEndElement()) {
 			printf("EndElement: %s @ %s\n", std::string(x.text()).c_str(), x.path().c_str());
-			break;
 		}
 	}
 	printf("done\n");

@@ -114,6 +114,11 @@ public:
 		init(begin, end);
 	}
 	
+	xstream(char const *ptr, size_t len)
+	{
+		init(ptr, ptr + len);
+	}
+
 	xstream(std::string_view const &s)
 	{
 		begin_ = s.data();
@@ -303,8 +308,12 @@ public:
 	}
 	bool match(char const *path) const
 	{
-		if (strncmp(path, current_path_.c_str(), current_path_.size()) == 0) {
-			if (path[current_path_.size()] == 0) {
+		int n = current_path_.size();
+		if (strncmp(path, current_path_.c_str(), n) == 0) {
+			if (path[n] == 0) {
+				return true;
+			}
+			if (path[n] == '/' && path[n + 1] == 0) {
 				return true;
 			}
 		}

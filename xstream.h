@@ -18,6 +18,109 @@ public:
 		EndElement,
 		Characters,
 	};
+	static std::string decode_html_string(std::string_view const &s)
+	{
+		std::vector<char> vec;
+		vec.reserve(1024);
+		char const *begin = s.data();
+		char const *end = s.data() + s.size();
+		char const *ptr = begin;
+		while (ptr < end) {
+			if (*ptr == '&') {
+				ptr++;
+				size_t n = 0;
+				for (n = 0; ptr + n < end && ptr[n] != ';'; n++);
+				auto IsEntity = [&](char const *name) {
+					size_t i = 0;
+					while (1) {
+						if (name[i] == 0) return i == n;
+						if (ptr[i] != name[i]) return false;
+						i++;
+					}
+				};
+				if (IsEntity("amp")) {
+					vec.push_back('&');
+				} else if (IsEntity("lt")) {
+					vec.push_back('<');
+				} else if (IsEntity("gt")) {
+					vec.push_back('>');
+				} else if (IsEntity("quot")) {
+					vec.push_back('\"');
+				} else if (IsEntity("apos")) {
+					vec.push_back('\'');
+				}
+				ptr += n + 1;
+			} else {
+				vec.push_back(*ptr);
+				ptr++;
+			}
+		}
+		return std::string(vec.data(), vec.size());
+	}
+	static std::string encode_html_string(std::string_view const &s)
+	{
+		std::vector<char> vec;
+		auto write_c = [&](char c) {
+			vec.push_back(c);
+		};
+		auto write_v = [&](std::string_view const &s) {
+			vec.insert(vec.end(), s.begin(), s.end());
+		};
+		auto write_s = [&](char const *s) {
+			write_v(std::string_view(s));
+		};
+		auto write_u = [&](unsigned int c) {
+			char tmp[10];
+			sprintf(tmp, "&#%u;", c);
+			write_s(tmp);
+		};
+		vec.reserve(1024);
+		char const *ptr = s.begin();
+		char const *end = s.end();
+		while (ptr < end) {
+			int c = *ptr & 0xff;
+			ptr++;
+			switch (c) {
+			case '&':
+				write_s("&amp;");
+				break;
+			case '<':
+				write_s("&lt;");
+				break;
+			case '>':
+				write_s("&gt;");
+				break;
+			case '\"':
+				write_s("&quot;");
+				break;
+			case '\'':
+				write_s("&apos;");
+				break;
+			case '\b':
+				write_s("\\b");
+				break;
+			case '\f':
+				write_s("\\f");
+				break;
+			case '\n':
+				write_s("\\n");
+				break;
+			case '\r':
+				write_s("\\r");
+				break;
+			case '\t':
+				write_s("\\t");
+				break;
+			default:
+				if (isprint(c)) {
+					write_c(c);
+				} else {
+					write_u(c);
+				}
+			}
+		}
+		return std::string(vec.data(), vec.size());
+	}
 private:
 	char const *begin_ = nullptr;
 	char const *end_ = nullptr;
@@ -57,48 +160,9 @@ private:
 		}
 		return true;
 	}
-	std::string decode_string(std::string_view const &s) const
+	std::string decode_html_string(std::vector<char> const &s) const
 	{
-		std::vector<char> vec;
-		vec.reserve(1024);
-		char const *begin = s.data();
-		char const *end = s.data() + s.size();
-		char const *ptr = begin;
-		while (ptr < end) {
-			if (*ptr == '&') {
-				ptr++;
-				size_t n = 0;
-				for (n = 0; ptr + n < end && ptr[n] != ';'; n++);
-				auto IsEntity = [&](char const *name) {
-					size_t i = 0;
-					while (1) {
-						if (name[i] == 0) return i == n;
-						if (ptr[i] != name[i]) return false;
-						i++;
-					}
-				};
-				if (IsEntity("amp")) {
-					vec.push_back('&');
-				} else if (IsEntity("lt")) {
-					vec.push_back('<');
-				} else if (IsEntity("gt")) {
-					vec.push_back('>');
-				} else if (IsEntity("quot")) {
-					vec.push_back('\"');
-				} else if (IsEntity("apos")) {
-					vec.push_back('\'');
-				}
-				ptr += n + 1;
-			} else {
-				vec.push_back(*ptr);
-				ptr++;
-			}
-		}
-		return std::string(vec.data(), vec.size());
-	}
-	std::string decode_string(std::vector<char> const &s) const
-	{
-		return decode_string(std::string_view(s.data(), s.size()));
+		return decode_html_string(std::string_view(s.data(), s.size()));
 	}
 	void init(char const *begin, char const *end)
 	{
@@ -107,6 +171,19 @@ private:
 		ptr_ = begin_;
 		paths_.clear();
 		current_path_ = "/";
+	}
+	bool match_internal(char const *path) const
+	{
+		int n = current_path_.size();
+		if (strncmp(path, current_path_.c_str(), n) == 0) {
+			if (path[n] == 0) {
+				return true;
+			}
+			if (path[n] == '/' && path[n + 1] == 0) {
+				return true;
+			}
+		}
+		return false;
 	}
 public:
 	xstream(char const *begin, char const *end)
@@ -320,16 +397,11 @@ public:
 	}
 	bool match(char const *path) const
 	{
-		int n = current_path_.size();
-		if (strncmp(path, current_path_.c_str(), n) == 0) {
-			if (path[n] == 0) {
-				return true;
-			}
-			if (path[n] == '/' && path[n + 1] == 0) {
-				return true;
-			}
-		}
-		return false;
+		return isStartElement() && match_internal(path);
+	}
+	bool match_end(char const *path) const
+	{
+		return isEndElement() && match_internal(path);
 	}
 	std::string text() const
 	{
@@ -338,7 +410,7 @@ public:
 		case EndElement:
 			return std::string(element_name_);
 		case Characters:
-			return decode_string(characters_);
+			return decode_html_string(characters_);
 		}
 		return {};
 	}
@@ -346,7 +418,7 @@ public:
 	{
 		for (auto const &attr : attributes_) {
 			if (attr.first == name) {
-				return decode_string(attr.second);
+				return decode_html_string(attr.second);
 			}
 		}
 		return defval;
@@ -355,7 +427,7 @@ public:
 	{
 		std::vector<std::pair<std::string, std::string>> ret;
 		for (auto const &attr : attributes_) {
-			ret.emplace_back(std::string(attr.first), decode_string(attr.second));
+			ret.emplace_back(std::string(attr.first), decode_html_string(attr.second));
 		}
 		return ret;
 	}

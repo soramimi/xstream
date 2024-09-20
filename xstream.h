@@ -20,42 +20,9 @@ public:
 	};
 	static std::string decode_html_string(std::string_view const &s)
 	{
-		std::vector<char> vec;
-		vec.reserve(1024);
-		char const *begin = s.data();
-		char const *end = s.data() + s.size();
-		char const *ptr = begin;
-		while (ptr < end) {
-			if (*ptr == '&') {
-				ptr++;
-				size_t n = 0;
-				for (n = 0; ptr + n < end && ptr[n] != ';'; n++);
-				auto IsEntity = [&](char const *name) {
-					size_t i = 0;
-					while (1) {
-						if (name[i] == 0) return i == n;
-						if (ptr[i] != name[i]) return false;
-						i++;
-					}
-				};
-				if (IsEntity("amp")) {
-					vec.push_back('&');
-				} else if (IsEntity("lt")) {
-					vec.push_back('<');
-				} else if (IsEntity("gt")) {
-					vec.push_back('>');
-				} else if (IsEntity("quot")) {
-					vec.push_back('\"');
-				} else if (IsEntity("apos")) {
-					vec.push_back('\'');
-				}
-				ptr += n + 1;
-			} else {
-				vec.push_back(*ptr);
-				ptr++;
-			}
-		}
-		return std::string(vec.data(), vec.size());
+		std::vector<char> ret;
+		decode_html_string(s, &ret);
+		return std::string(ret.data(), ret.size());
 	}
 	static std::string encode_html_string(std::string_view const &s)
 	{
@@ -75,8 +42,8 @@ public:
 			write_s(tmp);
 		};
 		vec.reserve(1024);
-		char const *ptr = s.begin();
-		char const *end = s.end();
+		char const *ptr = s.data();
+		char const *end = ptr + s.size();
 		while (ptr < end) {
 			int c = *ptr & 0xff;
 			ptr++;
@@ -129,7 +96,22 @@ private:
 	StateType state_ = None;
 	bool next_end_element_ = false;
 	std::string_view element_name_;
-	std::vector<char> characters_;
+	struct CharPart {
+		enum Type {
+			Text,
+			CDATA,
+			Comment,
+		};
+		Type type = Text;
+		std::string_view sv;
+		CharPart() = default;
+		CharPart(Type type, char const *begin, char const *end)
+			: type(type)
+			, sv(begin, end - begin)
+		{
+		}
+	};
+	std::vector<CharPart> characters_;
 	std::vector<std::pair<std::string_view, std::string_view>> attributes_;
 	std::vector<std::string> paths_;
 	std::string current_path_;
@@ -160,9 +142,64 @@ private:
 		}
 		return true;
 	}
-	std::string decode_html_string(std::vector<char> const &s) const
+	static void decode_html_string(std::string_view const &s, std::vector<char> *out)
 	{
-		return decode_html_string(std::string_view(s.data(), s.size()));
+		out->reserve(1024);
+		char const *begin = s.data();
+		char const *end = s.data() + s.size();
+		char const *ptr = begin;
+		while (ptr < end) {
+			if (*ptr == '&') {
+				ptr++;
+				size_t n = 0;
+				for (n = 0; ptr + n < end && ptr[n] != ';'; n++);
+				auto IsEntity = [&](char const *name) {
+					size_t i = 0;
+					while (1) {
+						if (name[i] == 0) return i == n;
+						if (ptr[i] != name[i]) return false;
+						i++;
+					}
+				};
+				if (IsEntity("amp")) {
+					out->push_back('&');
+				} else if (IsEntity("lt")) {
+					out->push_back('<');
+				} else if (IsEntity("gt")) {
+					out->push_back('>');
+				} else if (IsEntity("quot")) {
+					out->push_back('\"');
+				} else if (IsEntity("apos")) {
+					out->push_back('\'');
+				}
+				ptr += n + 1;
+			} else {
+				out->push_back(*ptr);
+				ptr++;
+			}
+		}
+	}
+	std::string decode_html_string(std::vector<CharPart> const &parts) const
+	{
+		std::vector<char> v;
+		size_t len = 0;
+		for (auto &part : parts) {
+			len += part.sv.size();
+		}
+		v.reserve(len + 100);
+		for (auto &part : parts) {
+			switch (part.type) {
+			case CharPart::Text:
+				decode_html_string(part.sv, &v);
+				break;
+			case CharPart::CDATA:
+				v.insert(v.end(), part.sv.begin(), part.sv.end());
+				break;
+			case CharPart::Comment:
+				break;
+			}
+		}
+		return std::string(v.data(), v.size());
 	}
 	void init(char const *begin, char const *end)
 	{
@@ -184,6 +221,21 @@ private:
 			}
 		}
 		return false;
+	}
+	void insert_chars(CharPart::Type type, char const *begin, char const *end)
+	{
+		if (begin != end) {
+			characters_.emplace_back(type, begin, end);
+		}
+	}
+	bool is_element_name(std::string_view const &name) const
+	{
+		return name == element_name_;
+	}
+	bool is_element_name(char const *name) const
+	{
+		size_t n = element_name_.size();
+		return strncmp(name, element_name_.data(), n) == 0 && name[n] == 0;
 	}
 public:
 	xstream(char const *begin, char const *end)
@@ -223,6 +275,19 @@ public:
 				state_ = EndElement;
 				return true;
 			}
+			if (ptr_ + 9 < end_ && *ptr_ == '<') {
+				if (memcmp(ptr_, "<![CDATA[", 9) == 0) {
+					ptr_ += 9;
+					char const *left = ptr_;
+					while (ptr_ + 2 < end_ && memcmp(ptr_, "]]>", 3) != 0) {
+						ptr_++;
+					}
+					insert_chars(CharPart::CDATA, left, ptr_);
+					ptr_ += 3;
+					chars_ = nullptr;
+					return true;
+				}
+			}
 			if (ptr_ < end_ && *ptr_ == '<') {
 				ptr_++;
 				if (ptr_ + 3 < end_ && memcmp(ptr_, "!--", 3) == 0) {
@@ -231,20 +296,9 @@ public:
 					while (ptr_ + 2 < end_ && memcmp(ptr_, "-->", 3) != 0) {
 						ptr_++;
 					}
-					characters_.insert(characters_.end(), left, ptr_);
+					insert_chars(CharPart::Text, left, ptr_);
 					ptr_ += 3;
 					state_ = Comment;
-					return true;
-				}
-				if (ptr_ + 8 < end_ && memcmp(ptr_, "![CDATA[", 8) == 0) {
-					ptr_ += 8;
-					char const *left = ptr_;
-					while (ptr_ + 2 < end_ && memcmp(ptr_, "]]>", 3) != 0) {
-						ptr_++;
-					}
-					characters_.insert(characters_.end(), left, ptr_);
-					ptr_ += 3;
-					chars_ = nullptr;
 					return true;
 				}
 				char start = 0;
@@ -357,7 +411,7 @@ public:
 						return false;
 					}
 					if (c == '<') {
-						characters_.insert(characters_.end(), chars_, ptr_);
+						insert_chars(CharPart::Text, chars_, ptr_);
 						if (ptr_ + 1 < end_ && (ptr_[1] == '/' || ptr_[1] == '!')) {
 							if (state_ == StartElement || state_ == Characters) {
 								chars_ = nullptr;
@@ -386,6 +440,22 @@ public:
 	bool isEndElement() const
 	{
 		return state() == EndElement;
+	}
+	bool isStartElement(char const *name) const
+	{
+		return isStartElement() && is_element_name(name);
+	}
+	bool isEndElement(char const *name) const
+	{
+		return isEndElement() && is_element_name(name);
+	}
+	bool isStartElement(std::string_view const &name) const
+	{
+		return isStartElement() && is_element_name(name);
+	}
+	bool isEndElement(std::string_view const &name) const
+	{
+		return isEndElement() && is_element_name(name);
 	}
 	bool isCharacters() const
 	{

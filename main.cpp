@@ -15,7 +15,7 @@
 
 int main()
 {
-#if 0
+#if 1
 	std::string xml = "<hoge><fuga foo='bar'>Hello, <![CDATA[world]]></fuga></hoge>";
 #else
 	

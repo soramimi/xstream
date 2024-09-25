@@ -412,14 +412,9 @@ public:
 					}
 					if (c == '<') {
 						insert_chars(CharPart::Text, chars_, ptr_);
-						if (ptr_ + 1 < end_ && (ptr_[1] == '/' || ptr_[1] == '!')) {
-							if (state_ == StartElement || state_ == Characters) {
-								chars_ = nullptr;
-								state_ = Characters;
-								return true;
-							}
-						}
-						break;
+						chars_ = nullptr;
+						state_ = Characters;
+						return true;
 					}
 					ptr_++;
 				}

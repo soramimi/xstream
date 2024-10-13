@@ -39,13 +39,13 @@ int main()
 
 #endif
 
-	xstream x(xml);
+	xstream::reader x(xml);
 	while (x.next()) {
-		if (x.isCharacters()) {
+		if (x.is_characters()) {
 			printf("Characters: %s\n", std::string(x.text()).c_str());
-		} else if (x.isStartElement()) {
+		} else if (x.is_start_element()) {
 			printf("StartElement: %s\n", std::string(x.text()).c_str());
-		} else if (x.isEndElement()) {
+		} else if (x.is_end_element()) {
 			printf("EndElement: %s @ %s\n", std::string(x.text()).c_str(), x.path().c_str());
 		}
 	}

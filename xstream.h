@@ -7,8 +7,33 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <functional>
+#include "urlencode.h"
+#include "htmlencode.h"
 
-class xstream {
+namespace xstream {
+
+class reader {
+private:
+
+	static inline void vecprint(std::vector<char> *out, char c)
+	{
+		out->push_back(c);
+	}
+
+	static inline void vecprint(std::vector<char> *out, char const *s)
+	{
+		out->insert(out->end(), s, s + strlen(s));
+	}
+
+	static inline std::string_view to_string(std::vector<char> const &vec)
+	{
+		if (!vec.empty()) {
+			return {vec.data(), vec.size()};
+		}
+		return {};
+	}
+
 public:
 	enum StateType {
 		None,
@@ -18,76 +43,6 @@ public:
 		EndElement,
 		Characters,
 	};
-	static std::string decode_html_string(std::string_view const &s)
-	{
-		std::vector<char> ret;
-		decode_html_string(s, &ret);
-		return std::string(ret.data(), ret.size());
-	}
-	static std::string encode_html_string(std::string_view const &s)
-	{
-		std::vector<char> vec;
-		auto write_c = [&](char c) {
-			vec.push_back(c);
-		};
-		auto write_v = [&](std::string_view const &s) {
-			vec.insert(vec.end(), s.begin(), s.end());
-		};
-		auto write_s = [&](char const *s) {
-			write_v(std::string_view(s));
-		};
-		auto write_u = [&](unsigned int c) {
-			char tmp[10];
-			sprintf(tmp, "&#%u;", c);
-			write_s(tmp);
-		};
-		vec.reserve(1024);
-		char const *ptr = s.data();
-		char const *end = ptr + s.size();
-		while (ptr < end) {
-			int c = *ptr & 0xff;
-			ptr++;
-			switch (c) {
-			case '&':
-				write_s("&amp;");
-				break;
-			case '<':
-				write_s("&lt;");
-				break;
-			case '>':
-				write_s("&gt;");
-				break;
-			case '\"':
-				write_s("&quot;");
-				break;
-			case '\'':
-				write_s("&apos;");
-				break;
-			case '\b':
-				write_s("\\b");
-				break;
-			case '\f':
-				write_s("\\f");
-				break;
-			case '\n':
-				write_s("\\n");
-				break;
-			case '\r':
-				write_s("\\r");
-				break;
-			case '\t':
-				write_s("\\t");
-				break;
-			default:
-				if (isprint(c)) {
-					write_c(c);
-				} else {
-					write_u(c);
-				}
-			}
-		}
-		return std::string(vec.data(), vec.size());
-	}
 private:
 	char const *begin_ = nullptr;
 	char const *end_ = nullptr;
@@ -142,43 +97,6 @@ private:
 		}
 		return true;
 	}
-	static void decode_html_string(std::string_view const &s, std::vector<char> *out)
-	{
-		out->reserve(1024);
-		char const *begin = s.data();
-		char const *end = s.data() + s.size();
-		char const *ptr = begin;
-		while (ptr < end) {
-			if (*ptr == '&') {
-				ptr++;
-				size_t n = 0;
-				for (n = 0; ptr + n < end && ptr[n] != ';'; n++);
-				auto IsEntity = [&](char const *name) {
-					size_t i = 0;
-					while (1) {
-						if (name[i] == 0) return i == n;
-						if (ptr[i] != name[i]) return false;
-						i++;
-					}
-				};
-				if (IsEntity("amp")) {
-					out->push_back('&');
-				} else if (IsEntity("lt")) {
-					out->push_back('<');
-				} else if (IsEntity("gt")) {
-					out->push_back('>');
-				} else if (IsEntity("quot")) {
-					out->push_back('\"');
-				} else if (IsEntity("apos")) {
-					out->push_back('\'');
-				}
-				ptr += n + 1;
-			} else {
-				out->push_back(*ptr);
-				ptr++;
-			}
-		}
-	}
 	std::string decode_html_string(std::vector<CharPart> const &parts) const
 	{
 		std::vector<char> v;
@@ -190,7 +108,10 @@ private:
 		for (auto &part : parts) {
 			switch (part.type) {
 			case CharPart::Text:
-				decode_html_string(part.sv, &v);
+				{
+					std::string s = html_decode(part.sv);
+					v.insert(v.end(), s.begin(), s.end());
+				}
 				break;
 			case CharPart::CDATA:
 				v.insert(v.end(), part.sv.begin(), part.sv.end());
@@ -238,17 +159,17 @@ private:
 		return strncmp(name, element_name_.data(), n) == 0 && name[n] == 0;
 	}
 public:
-	xstream(char const *begin, char const *end)
+	reader(char const *begin, char const *end)
 	{
 		init(begin, end);
 	}
 	
-	xstream(char const *ptr, size_t len)
+	reader(char const *ptr, size_t len)
 	{
 		init(ptr, ptr + len);
 	}
 
-	xstream(std::string_view const &s)
+	reader(std::string_view const &s)
 	{
 		begin_ = s.data();
 		end_ = s.data() + s.size();
@@ -428,31 +349,31 @@ public:
 	{
 		return state_;
 	}
-	bool isStartElement() const
+	bool is_start_element() const
 	{
 		return state() == StartElement;
 	}
-	bool isEndElement() const
+	bool is_end_element() const
 	{
 		return state() == EndElement;
 	}
-	bool isStartElement(char const *name) const
+	bool is_start_element(char const *name) const
 	{
-		return isStartElement() && is_element_name(name);
+		return is_start_element() && is_element_name(name);
 	}
-	bool isEndElement(char const *name) const
+	bool is_end_element(char const *name) const
 	{
-		return isEndElement() && is_element_name(name);
+		return is_end_element() && is_element_name(name);
 	}
-	bool isStartElement(std::string_view const &name) const
+	bool is_start_element(std::string_view const &name) const
 	{
-		return isStartElement() && is_element_name(name);
+		return is_start_element() && is_element_name(name);
 	}
-	bool isEndElement(std::string_view const &name) const
+	bool is_end_element(std::string_view const &name) const
 	{
-		return isEndElement() && is_element_name(name);
+		return is_end_element() && is_element_name(name);
 	}
-	bool isCharacters() const
+	bool is_characters() const
 	{
 		return state() == Characters;
 	}
@@ -462,11 +383,11 @@ public:
 	}
 	bool match(char const *path) const
 	{
-		return isStartElement() && match_internal(path);
+		return is_start_element() && match_internal(path);
 	}
 	bool match_end(char const *path) const
 	{
-		return isEndElement() && match_internal(path);
+		return is_end_element() && match_internal(path);
 	}
 	std::string text() const
 	{
@@ -483,7 +404,7 @@ public:
 	{
 		for (auto const &attr : attributes_) {
 			if (attr.first == name) {
-				return decode_html_string(attr.second);
+				return html_decode(attr.second);
 			}
 		}
 		return defval;
@@ -492,10 +413,119 @@ public:
 	{
 		std::vector<std::pair<std::string, std::string>> ret;
 		for (auto const &attr : attributes_) {
-			ret.emplace_back(std::string(attr.first), decode_html_string(attr.second));
+			ret.emplace_back(std::string(attr.first), html_decode(attr.second));
 		}
 		return ret;
 	}
-};
+}; // class reader
 
+class writer {
+private:
+	std::function<int (char const *p, int n)> fn_writer;
+	std::vector<char> line_;
+	bool inside_tag_ = false;
+	size_t newline_ = false;
+	std::vector<std::string> element_stack_;
+	void write_line(std::string_view const &s)
+	{
+		line_.insert(line_.end(), s.begin(), s.end());
+	}
+	void write_indent(size_t n)
+	{
+		n *= 2;
+		if (newline_) {
+			n++;
+		}
+		line_.insert(line_.begin(), n, ' ');
+		if (newline_) {
+			line_[0] = '\n';
+		}
+	}
+	void flush()
+	{
+		if (!line_.empty()) {
+			fn_writer(line_.data(), line_.size());
+			line_.clear();
+		}
+	}
+	void close_tag()
+	{
+		if (inside_tag_) {
+			write_line(">");
+			inside_tag_ = false;
+		}
+	}
+public:
+	writer(std::function<int (char const *p, int n)> fn_writer)
+		: fn_writer(fn_writer)
+	{
+	}
+	void start_document()
+	{
+	}
+	void end_document()
+	{
+		while (!element_stack_.empty()) {
+			end_element();
+		}
+		if (newline_) {
+			char c = '\n';
+			fn_writer(&c, 1);
+		}
+	}
+	void start_element(std::string const &name)
+	{
+		close_tag();
+		flush();
+		write_indent(element_stack_.size());
+		element_stack_.push_back(name);
+		write_line("<");
+		write_line(name);
+		inside_tag_ = true;
+		newline_ = true;
+	}
+	void end_element()
+	{
+		if (!element_stack_.empty()) {
+			std::string name = element_stack_.back();
+			if (inside_tag_) {
+				write_line(" />");
+				if (!element_stack_.empty()) {
+					element_stack_.pop_back();
+				}
+				inside_tag_ = false;
+			} else {
+				close_tag();
+				flush();
+				element_stack_.pop_back();
+				if (newline_) {
+					write_indent(element_stack_.size());
+				}
+				write_line("</");
+				write_line(name);
+				write_line(">");
+			}
+			flush();
+			newline_ = true;
+		}
+	}
+	void write_characters(std::string_view const &s)
+	{
+		close_tag();
+		newline_ = false;
+		write_line(html_encode(s));
+	}
+	void write_attribute(std::string_view const &name, std::string_view const &value)
+	{
+		if (inside_tag_) {
+			write_line(" ");
+			write_line(name);
+			write_line("=\"");
+			write_line(html_encode(value));
+			write_line("\"");
+		}
+	}
+}; // class writer
+
+} // namespace xstream
 #endif // XSTREAM_H

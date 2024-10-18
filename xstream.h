@@ -66,10 +66,61 @@ private:
 		{
 		}
 	};
-	std::vector<CharPart> characters_;
+public:
+	class EncodedCharacters {
+		friend class reader;
+	private:
+		std::vector<CharPart> chars_;
+		void clear()
+		{
+			chars_.clear();
+		}
+		void append(CharPart::Type type, char const *begin, char const *end)
+		{
+			if (begin != end) {
+				chars_.emplace_back(type, begin, end);
+			}
+		}
+	public:
+		void append(EncodedCharacters &&a)
+		{
+			EncodedCharacters b = std::move(a);
+			for (CharPart &f : b.chars_) {
+				chars_.push_back(std::move(f));
+			}
+		}
+		std::string to_string() const
+		{
+			std::vector<CharPart> const &parts = chars_;
+			std::vector<char> v;
+			size_t len = 0;
+			for (auto &part : parts) {
+				len += part.sv.size();
+			}
+			v.reserve(len + 100);
+			for (auto &part : parts) {
+				switch (part.type) {
+				case CharPart::Text:
+					{
+						std::string s = html_decode(part.sv);
+						v.insert(v.end(), s.begin(), s.end());
+					}
+					break;
+				case CharPart::CDATA:
+					v.insert(v.end(), part.sv.begin(), part.sv.end());
+					break;
+				case CharPart::Comment:
+					break;
+				}
+			}
+			return std::string(v.data(), v.size());
+		}
+	};
+private:
+	EncodedCharacters characters_;
 	std::vector<std::pair<std::string_view, std::string_view>> attributes_;
 	std::vector<std::string> paths_;
-	std::string current_path_;
+	std::string last_path_;
 	bool issymf(char c)
 	{
 		int d = (unsigned char)c;
@@ -97,43 +148,37 @@ private:
 		}
 		return true;
 	}
-	std::string decode_html_string(std::vector<CharPart> const &parts) const
-	{
-		std::vector<char> v;
-		size_t len = 0;
-		for (auto &part : parts) {
-			len += part.sv.size();
-		}
-		v.reserve(len + 100);
-		for (auto &part : parts) {
-			switch (part.type) {
-			case CharPart::Text:
-				{
-					std::string s = html_decode(part.sv);
-					v.insert(v.end(), s.begin(), s.end());
-				}
-				break;
-			case CharPart::CDATA:
-				v.insert(v.end(), part.sv.begin(), part.sv.end());
-				break;
-			case CharPart::Comment:
-				break;
-			}
-		}
-		return std::string(v.data(), v.size());
-	}
 	void init(char const *begin, char const *end)
 	{
 		begin_ = begin;
 		end_ = end;
 		ptr_ = begin_;
+		reset_paths();
+	}
+	std::string const &current_path() const
+	{
+		if (!last_path_.empty()) return last_path_;
+		if (paths_.empty()) return last_path_; // empty string
+		return paths_.back();
+	}
+	void reset_paths()
+	{
 		paths_.clear();
-		current_path_ = "/";
+		paths_.push_back({});
+		last_path_.clear();
+	}
+	void pop_path()
+	{
+		if (!last_path_.empty()) {
+			last_path_.clear();
+		} else if (!paths_.empty()) {
+			paths_.pop_back();
+		}
 	}
 	bool match_internal(char const *path) const
 	{
-		int n = current_path_.size();
-		if (strncmp(path, current_path_.c_str(), n) == 0) {
+		int n = current_path().size();
+		if (strncmp(path, current_path().c_str(), n) == 0) {
 			if (path[n] == 0) {
 				return true;
 			}
@@ -143,11 +188,9 @@ private:
 		}
 		return false;
 	}
-	void insert_chars(CharPart::Type type, char const *begin, char const *end)
+	void append_chars(CharPart::Type type, char const *begin, char const *end)
 	{
-		if (begin != end) {
-			characters_.emplace_back(type, begin, end);
-		}
+		characters_.append(type, begin, end);
 	}
 	bool is_element_name(std::string_view const &name) const
 	{
@@ -178,12 +221,24 @@ public:
 
 	bool next()
 	{
+		if (state_ == StartElement) {
+		}
 		if (state_ == EndElement) {
 			if (paths_.empty()) {
-				current_path_ = "/";
+				reset_paths();
 			} else {
-				current_path_ = paths_.back();
-				paths_.pop_back();
+				size_t i = paths_.size();
+				while (i > 0) {
+					i--;
+					size_t s = paths_[i].size();
+					size_t n = element_name_.size();
+					if (s > n) {
+						if (paths_[i][s - n - 1] == '/' && memcmp(&paths_[i][s - n], element_name_.data(), n) == 0) {
+							paths_.resize(i);
+							break;
+						}
+					}
+				}
 			}
 		}
 		while (1) {
@@ -203,7 +258,7 @@ public:
 					while (ptr_ + 2 < end_ && memcmp(ptr_, "]]>", 3) != 0) {
 						ptr_++;
 					}
-					insert_chars(CharPart::CDATA, left, ptr_);
+					append_chars(CharPart::CDATA, left, ptr_);
 					ptr_ += 3;
 					chars_ = nullptr;
 					return true;
@@ -217,7 +272,7 @@ public:
 					while (ptr_ + 2 < end_ && memcmp(ptr_, "-->", 3) != 0) {
 						ptr_++;
 					}
-					insert_chars(CharPart::Text, left, ptr_);
+					append_chars(CharPart::Text, left, ptr_);
 					ptr_ += 3;
 					state_ = Comment;
 					return true;
@@ -305,15 +360,7 @@ public:
 						if (start == '/') {
 							state_ = EndElement;
 						} else {
-							if (start == '?') {
-								current_path_ = '/' + std::string(element_name_);
-							} else if (paths_.empty()) {
-								paths_.push_back("/");
-								current_path_ = '/' + std::string(element_name_);
-							} else {
-								paths_.push_back(current_path_);
-								current_path_ = current_path_  + '/' + std::string(element_name_);
-							}
+							paths_.push_back(current_path() + '/' + std::string(element_name_));
 							state_ = StartElement;
 						}
 						return true;
@@ -322,6 +369,9 @@ public:
 				state_ = Error;
 				return true;
 			} else if (ptr_ < end_) {
+				if (state_ == EndElement) {
+					last_path_ = {};
+				}
 				while (1) {
 					int c = -1;
 					if (ptr_ < end_) {
@@ -332,7 +382,7 @@ public:
 						return false;
 					}
 					if (c == '<') {
-						insert_chars(CharPart::Text, chars_, ptr_);
+						append_chars(CharPart::Text, chars_, ptr_);
 						chars_ = nullptr;
 						state_ = Characters;
 						return true;
@@ -377,9 +427,9 @@ public:
 	{
 		return state() == Characters;
 	}
-	std::string path() const
+	std::string const &path() const
 	{
-		return current_path_;
+		return current_path();
 	}
 	bool match(char const *path) const
 	{
@@ -389,6 +439,10 @@ public:
 	{
 		return is_end_element() && match_internal(path);
 	}
+	EncodedCharacters const &characters() const
+	{
+		return characters_;
+	}
 	std::string text() const
 	{
 		switch (state()) {
@@ -396,7 +450,7 @@ public:
 		case EndElement:
 			return std::string(element_name_);
 		case Characters:
-			return decode_html_string(characters_);
+			return characters().to_string();
 		}
 		return {};
 	}

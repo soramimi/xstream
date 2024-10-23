@@ -8,10 +8,154 @@
 #include <string_view>
 #include <vector>
 #include <functional>
-#include "urlencode.h"
-#include "htmlencode.h"
+
+// #include "htmlencode.h"
 
 namespace xstream {
+
+#ifdef __HTMLENCODE_H
+
+inline std::string html_encode(std::string_view const &str)
+{
+	return ::html_encode(str, true);
+
+}
+
+inline std::string html_decode(std::string_view const &str)
+{
+	return ::html_decode(str);
+}
+
+#else
+
+static inline void vecprint(std::vector<char> *out, char c)
+{
+	out->push_back(c);
+}
+
+static inline void vecprint(std::vector<char> *out, char const *s)
+{
+	out->insert(out->end(), s, s + strlen(s));
+}
+
+static inline void html_encode_(char const *ptr, char const *end, bool utf8through, std::vector<char> *vec)
+{
+	while (ptr < end) {
+		int c = *ptr & 0xff;
+		ptr++;
+		switch (c) {
+		case '&':
+			vecprint(vec, "&amp;");
+			break;
+		case '<':
+			vecprint(vec, "&lt;");
+			break;
+		case '>':
+			vecprint(vec, "&gt;");
+			break;
+		case '\"':
+			vecprint(vec, "&quot;");
+			break;
+		case '\'':
+			vecprint(vec, "&apos;");
+			break;
+		case '\t':
+		case '\n':
+			vecprint(vec, c);
+			break;
+		default:
+			if (c < 0x80 ? (c < 0x20 || c == '\'') : !utf8through) {
+				char tmp[10];
+				sprintf(tmp, "&#%u;", c);
+				vecprint(vec, tmp);
+			} else {
+				vecprint(vec, c);
+			}
+		}
+	}
+}
+
+static inline std::string html_encode(std::string_view const &str, bool utf8through = true)
+{
+	char const *begin = str.data();
+	char const *end = begin + str.size();
+	char const *ptr = begin;
+	while (ptr < end) {
+		int c = (unsigned char)*ptr;
+		if (isspace(c) || strchr("&<>\"\'", c)) {
+			break;
+		}
+		ptr++;
+	}
+	if (ptr == end) {
+		return (std::string)str;
+	}
+	std::vector<char> vec;
+	vec.reserve(str.size() * 2);
+	vec.insert(vec.end(), begin, ptr);
+	html_encode_(ptr, end, utf8through, &vec);
+	begin = &vec[0];
+	end = begin + vec.size();
+	return std::string(begin, end);
+}
+
+static inline void html_decode_(char const *ptr, char const *end, std::vector<char> *vec)
+{
+	while (ptr < end) {
+		int c = *ptr & 0xff;
+		ptr++;
+		if (c == '&') {
+			char const *next = strchr(ptr, ';');
+			if (!next) {
+				break;
+			}
+			std::string t(ptr, next);
+			if (t[0] == '#') {
+				c = atoi(t.c_str() + 1);
+				vecprint(vec, c);
+			} else if (t == "amp") {
+				vecprint(vec, '&');
+			} else if (t == "lt") {
+				vecprint(vec, '<');
+			} else if (t == "gt") {
+				vecprint(vec, '>');
+			} else if (t == "quot") {
+				vecprint(vec, '\"');
+			} else if (t == "apos") {
+				vecprint(vec, '\'');
+			}
+			ptr = next + 1;
+		} else {
+			vecprint(vec, c);
+		}
+	}
+}
+
+static inline std::string html_decode(std::string_view const &str)
+{
+	char const *begin = str.data();
+	char const *end = begin + str.size();
+	char const *ptr = begin;
+	while (ptr < end) {
+		int c = (unsigned char)*ptr;
+		if (c == '&') {
+			break;
+		}
+		ptr++;
+	}
+	if (ptr == end) {
+		return (std::string)str;
+	}
+	std::vector<char> vec;
+	vec.reserve(str.size() * 2);
+	vec.insert(vec.end(), begin, ptr);
+	html_decode_(ptr, end, &vec);
+	begin = &vec[0];
+	end = begin + vec.size();
+	return std::string(begin, end);
+}
+
+#endif // __HTMLENCODE_H
 
 class reader {
 private:

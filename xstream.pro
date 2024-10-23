@@ -3,11 +3,7 @@ TEMPLATE = app
 CONFIG += console
 
 SOURCES += \
-	htmlencode.cpp \
-	main.cpp \
-	urlencode.cpp
+	main.cpp
 
 HEADERS += \
-	htmlencode.h \
-	urlencode.h \
 	xstream.h

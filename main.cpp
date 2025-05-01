@@ -42,11 +42,13 @@ void test1()
 	xstream::Reader x(xml);
 	while (x.next()) {
 		if (x.is_characters()) {
-			printf("Characters: %s\n", std::string(x.text()).c_str());
+			auto v = x.characters().decode();
+			std::string_view sv(v.data(), v.size());
+			printf("Characters: %s\n", std::string(sv).c_str());
 		} else if (x.is_start_element()) {
-			printf("StartElement: %s\n", std::string(x.text()).c_str());
+			printf("StartElement: %s\n", x.name().c_str());
 		} else if (x.is_end_element()) {
-			printf("EndElement: %s @ %s\n", std::string(x.text()).c_str(), x.path().c_str());
+			printf("EndElement: %s @ %s\n", x.name().c_str(), x.path().c_str());
 		}
 	}
 	printf("done\n");
@@ -59,9 +61,9 @@ void test2()
 	while (r.next()) {
 		if (r.match("/hoge")) {
 		} else if (r.is_end_element()) {
-			printf("%s: %s\n", r.path().c_str(), r.characters().to_string().c_str());
+			printf("%s: %s\n", r.path().c_str(), r.text().c_str());
 			for (auto const &a : r.attributes()) {
-				printf("%s: %s\n", a.first.c_str(), a.second.c_str());
+				printf("%s: %s\n", a.first.c_str(), std::string(a.second).c_str());
 			}
 		}
 	}
@@ -69,6 +71,6 @@ void test2()
 
 int main()
 {
-	test2();
+	test1();
 	return 0;
 }

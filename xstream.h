@@ -2,13 +2,14 @@
 #ifndef XSTREAM_H
 #define XSTREAM_H
 
+#include <assert.h>
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <functional>
-#include <assert.h>
 
 // #include "htmlencode.h"
 
@@ -203,13 +204,28 @@ private:
 			CDATA,
 			Comment,
 		};
-		Type type = Text;
-		std::string_view sv;
+		Type type_ = Text;
+		std::string_view sv_;
 		CharPart() = default;
 		CharPart(Type type, char const *begin, char const *end)
-			: type(type)
-			, sv(begin, end - begin)
+			: type_(type)
+			, sv_(begin, end - begin)
 		{
+		}
+		Type type() const
+		{
+			return type_;
+		}
+		std::vector<char> decode() const
+		{
+			if (type_ == Text) {
+				std::vector<char> v;
+				html_decode_(sv_.data(), sv_.data() + sv_.size(), &v);
+				return v;
+			} else if (type_ == CDATA) {
+				return std::vector<char>(sv_.data(), sv_.data() + sv_.size());
+			}
+			return {};
 		}
 	};
 public:
@@ -228,6 +244,10 @@ public:
 			}
 		}
 	public:
+		EncodedCharacters()
+		{
+			chars_.reserve(16);
+		}
 		void append(EncodedCharacters &&a)
 		{
 			EncodedCharacters b = std::move(a);
@@ -238,28 +258,37 @@ public:
 		std::string to_string() const
 		{
 			std::vector<CharPart> const &parts = chars_;
-			std::vector<char> v;
+			std::vector<char> vec;
 			size_t len = 0;
 			for (auto &part : parts) {
-				len += part.sv.size();
+				len += part.sv_.size();
 			}
-			v.reserve(len + 100);
+			vec.reserve(len + 100);
 			for (auto &part : parts) {
-				switch (part.type) {
-				case CharPart::Text:
-					{
-						std::string s = html_decode(part.sv);
-						v.insert(v.end(), s.begin(), s.end());
-					}
-					break;
-				case CharPart::CDATA:
-					v.insert(v.end(), part.sv.begin(), part.sv.end());
-					break;
-				case CharPart::Comment:
-					break;
+				std::vector<char> v = part.decode();
+				if (!v.empty()) {
+					vec.insert(vec.end(), v.begin(), v.end());
 				}
 			}
-			return std::string(v.data(), v.size());
+			return std::string(vec.data(), vec.size());
+		}
+	};
+	class EscapedAttributeValue {
+	private:
+		std::string_view sv_;
+	public:
+		EscapedAttributeValue() = default;
+		EscapedAttributeValue(std::string_view const &sv)
+			: sv_(sv)
+		{
+		}
+		std::string to_string() const
+		{
+			return html_decode(sv_);
+		}
+		operator std::string () const
+		{
+			return to_string();
 		}
 	};
 private:
@@ -352,6 +381,11 @@ private:
 	{
 		size_t n = element_name_.size();
 		return strncmp(name, element_name_.data(), n) == 0 && name[n] == 0;
+	}
+	EncodedCharacters const &encoded_chars() const
+	{
+		assert(!stack_.empty());
+		return stack_.back().chars;
 	}
 public:
 	Reader(char const *begin, char const *end)
@@ -593,38 +627,41 @@ public:
 	{
 		return is_end_element() && match_internal(path);
 	}
-	EncodedCharacters const &characters() const
+	std::string name() const
 	{
-		assert(!stack_.empty());
-		return stack_.back().chars;
+		return std::string(element_name_);
 	}
 	std::string text() const
 	{
-		switch (state()) {
-		case StartElement:
-		case EndElement:
-			return std::string(element_name_);
-		case Characters:
-			return characters().to_string();
-		}
-		return {};
+		return encoded_chars().to_string();
 	}
-	std::string attribute(std::string_view const &name, std::string const &defval = {}) const
+	CharPart characters() const
+	{
+		assert(!stack_.empty());
+		if (stack_.back().chars.chars_.empty()) return {};
+		return stack_.back().chars.chars_.back();
+	}
+	std::optional<EscapedAttributeValue> attribute(std::string_view const &name) const
 	{
 		assert(!stack_.empty());
 		for (auto const &attr : stack_.back().atts) {
 			if (attr.first == name) {
-				return html_decode(attr.second);
+				return attr.second;
 			}
 		}
-		return defval;
+		return std::nullopt;
 	}
-	std::vector<std::pair<std::string, std::string>> attributes() const
+	std::string attribute(std::string_view const &name, std::string const &defval) const
 	{
-		std::vector<std::pair<std::string, std::string>> ret;
+		auto s = attribute(name);
+		return s ? (std::string)*s : defval;
+	}
+	std::vector<std::pair<std::string, EscapedAttributeValue>> attributes() const
+	{
+		std::vector<std::pair<std::string, EscapedAttributeValue>> ret;
 		assert(!stack_.empty());
 		for (auto const &attr : stack_.back().atts) {
-			ret.emplace_back(std::string(attr.first), html_decode(attr.second));
+			ret.emplace_back(std::string(attr.first), attr.second);
 		}
 		return ret;
 	}

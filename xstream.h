@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 #include <functional>
+#include <assert.h>
 
 // #include "htmlencode.h"
 
@@ -157,7 +158,7 @@ static inline std::string html_decode(std::string_view const &str)
 
 #endif // __HTMLENCODE_H
 
-class reader {
+class Reader {
 private:
 
 	static inline void vecprint(std::vector<char> *out, char c)
@@ -186,6 +187,7 @@ public:
 		StartElement,
 		EndElement,
 		Characters,
+		Declaration
 	};
 private:
 	char const *begin_ = nullptr;
@@ -212,7 +214,7 @@ private:
 	};
 public:
 	class EncodedCharacters {
-		friend class reader;
+		friend class Reader;
 	private:
 		std::vector<CharPart> chars_;
 		void clear()
@@ -261,9 +263,17 @@ public:
 		}
 	};
 private:
-	EncodedCharacters characters_;
-	std::vector<std::pair<std::string_view, std::string_view>> attributes_;
-	std::vector<std::string> paths_;
+	struct Tag {
+		std::string path;
+		std::vector<std::pair<std::string_view, std::string_view>> atts;
+		EncodedCharacters chars;
+		Tag() = default;
+		Tag(std::string const &path)
+			: path(path)
+		{
+		}
+	};
+	std::vector<Tag> stack_;
 	std::string last_path_;
 	bool issymf(char c)
 	{
@@ -297,26 +307,23 @@ private:
 		begin_ = begin;
 		end_ = end;
 		ptr_ = begin_;
-		reset_paths();
+
+		stack_.clear();
+		stack_.push_back(Tag());
+		last_path_.clear();
 	}
 	std::string const &current_path() const
 	{
 		if (!last_path_.empty()) return last_path_;
-		if (paths_.empty()) return last_path_; // empty string
-		return paths_.back();
-	}
-	void reset_paths()
-	{
-		paths_.clear();
-		paths_.push_back({});
-		last_path_.clear();
+		if (stack_.empty()) return last_path_; // empty string
+		return stack_.back().path;
 	}
 	void pop_path()
 	{
 		if (!last_path_.empty()) {
 			last_path_.clear();
-		} else if (!paths_.empty()) {
-			paths_.pop_back();
+		} else if (!stack_.empty()) {
+			stack_.pop_back();
 		}
 	}
 	bool match_internal(char const *path) const
@@ -334,7 +341,8 @@ private:
 	}
 	void append_chars(CharPart::Type type, char const *begin, char const *end)
 	{
-		characters_.append(type, begin, end);
+		assert(!stack_.empty());
+		stack_.back().chars.append(type, begin, end);
 	}
 	bool is_element_name(std::string_view const &name) const
 	{
@@ -346,17 +354,17 @@ private:
 		return strncmp(name, element_name_.data(), n) == 0 && name[n] == 0;
 	}
 public:
-	reader(char const *begin, char const *end)
+	Reader(char const *begin, char const *end)
 	{
 		init(begin, end);
 	}
 	
-	reader(char const *ptr, size_t len)
+	Reader(char const *ptr, size_t len)
 	{
 		init(ptr, ptr + len);
 	}
 
-	reader(std::string_view const &s)
+	Reader(std::string_view const &s)
 	{
 		begin_ = s.data();
 		end_ = s.data() + s.size();
@@ -365,29 +373,23 @@ public:
 
 	bool next()
 	{
-		if (state_ == StartElement) {
-		}
+		assert(!stack_.empty()); // least one element
 		if (state_ == EndElement) {
-			if (paths_.empty()) {
-				reset_paths();
-			} else {
-				size_t i = paths_.size();
-				while (i > 0) {
-					i--;
-					size_t s = paths_[i].size();
-					size_t n = element_name_.size();
-					if (s > n) {
-						if (paths_[i][s - n - 1] == '/' && memcmp(&paths_[i][s - n], element_name_.data(), n) == 0) {
-							paths_.resize(i);
-							break;
-						}
+			size_t i = stack_.size();
+			while (i > 0) {
+				i--;
+				size_t s = stack_[i].path.size();
+				size_t n = element_name_.size();
+				if (s > n) {
+					if (stack_[i].path[s - n - 1] == '/' && memcmp(&stack_[i].path[s - n], element_name_.data(), n) == 0) {
+						stack_.resize(i);
+						break;
 					}
 				}
 			}
 		}
 		while (1) {
 			if (!chars_) {
-				characters_.clear();
 				chars_ = ptr_;
 			}
 			if (next_end_element_) {
@@ -422,20 +424,22 @@ public:
 					return true;
 				}
 				char start = 0;
-				characters_.clear();
-				if (ptr_ < end_ && *ptr_ == '?') {
-					start = *ptr_;
-				} else if (ptr_ < end_ && (*ptr_ == '/' || *ptr_ == '!')) {
+				if (ptr_ < end_ && *ptr_ == '/') {
 					start = *ptr_++;
+				} else {
+					if (ptr_ < end_ && *ptr_ == '?') {
+						start = *ptr_;
+					} else if (ptr_ < end_ && *ptr_ == '!') {
+						start = *ptr_++;
+					}
 				}
 				if (ptr_ < end_ && (issymf(*ptr_) || *ptr_ == '?')) {
 					char const *left = ptr_++;
 					while (ptr_ < end_ && issym(*ptr_)) {
 						ptr_++;
 					}
-					characters_ = {};
 					element_name_ = std::string_view(left, ptr_ - left);
-					attributes_.clear();
+					std::vector<std::pair<std::string_view, std::string_view>> atts;
 					while (ptr_ < end_ && isspace((unsigned char)*ptr_)) {
 						ptr_++;
 						while (ptr_ < end_ && isspace((unsigned char)*ptr_)) {
@@ -481,7 +485,7 @@ public:
 									} else {
 										key = std::string_view(left, ptr_ - left);
 									}
-									attributes_.emplace_back(key, val);
+									atts.emplace_back(key, val);
 									break;
 								} else {
 									ptr_++;
@@ -497,6 +501,11 @@ public:
 					}
 					if (start == '?' && ptr_ < end_ && *ptr_ == '?') {
 						ptr_++;
+						if (ptr_ < end_ && *ptr_ == '>') {
+							ptr_++;
+							state_ = Declaration;
+							return true;
+						}
 					}
 					if (ptr_ < end_ && *ptr_ == '>') {
 						ptr_++;
@@ -504,7 +513,8 @@ public:
 						if (start == '/') {
 							state_ = EndElement;
 						} else {
-							paths_.push_back(current_path() + '/' + std::string(element_name_));
+							stack_.push_back(current_path() + '/' + std::string(element_name_));
+							stack_.back().atts = std::move(atts);
 							state_ = StartElement;
 						}
 						return true;
@@ -585,7 +595,8 @@ public:
 	}
 	EncodedCharacters const &characters() const
 	{
-		return characters_;
+		assert(!stack_.empty());
+		return stack_.back().chars;
 	}
 	std::string text() const
 	{
@@ -600,7 +611,8 @@ public:
 	}
 	std::string attribute(std::string_view const &name, std::string const &defval = {}) const
 	{
-		for (auto const &attr : attributes_) {
+		assert(!stack_.empty());
+		for (auto const &attr : stack_.back().atts) {
 			if (attr.first == name) {
 				return html_decode(attr.second);
 			}
@@ -610,14 +622,15 @@ public:
 	std::vector<std::pair<std::string, std::string>> attributes() const
 	{
 		std::vector<std::pair<std::string, std::string>> ret;
-		for (auto const &attr : attributes_) {
+		assert(!stack_.empty());
+		for (auto const &attr : stack_.back().atts) {
 			ret.emplace_back(std::string(attr.first), html_decode(attr.second));
 		}
 		return ret;
 	}
-}; // class reader
+}; // class Reader
 
-class writer {
+class Writer {
 private:
 	std::function<int (char const *p, int n)> fn_writer;
 	std::vector<char> line_;
@@ -654,7 +667,7 @@ private:
 		}
 	}
 public:
-	writer(std::function<int (char const *p, int n)> fn_writer)
+	Writer(std::function<int (char const *p, int n)> fn_writer)
 		: fn_writer(fn_writer)
 	{
 	}
@@ -723,7 +736,7 @@ public:
 			write_line("\"");
 		}
 	}
-}; // class writer
+}; // class Writer
 
 } // namespace xstream
 #endif // XSTREAM_H

@@ -331,15 +331,18 @@ private:
 		}
 		return true;
 	}
+	void reset_stack()
+	{
+		stack_.clear();
+		stack_.push_back({});
+		last_path_.clear();
+	}
 	void init(char const *begin, char const *end)
 	{
 		begin_ = begin;
 		end_ = end;
 		ptr_ = begin_;
-
-		stack_.clear();
-		stack_.push_back(Tag());
-		last_path_.clear();
+		reset_stack();
 	}
 	std::string const &current_path() const
 	{
@@ -357,8 +360,9 @@ private:
 	}
 	bool match_internal(char const *path) const
 	{
-		int n = current_path().size();
-		if (strncmp(path, current_path().c_str(), n) == 0) {
+		std::string currpath = current_path();
+		int n = currpath.size();
+		if (strncmp(path, currpath.c_str(), n) == 0) {
 			if (path[n] == 0) {
 				return true;
 			}
@@ -410,7 +414,7 @@ public:
 		assert(!stack_.empty()); // least one element
 		if (state_ == EndElement) {
 			size_t i = stack_.size();
-			while (i > 0) {
+			while (i > 1) {
 				i--;
 				size_t s = stack_[i].path.size();
 				size_t n = element_name_.size();
@@ -421,6 +425,8 @@ public:
 					}
 				}
 			}
+		} else if (state_ == Declaration) {
+			reset_stack();
 		}
 		while (1) {
 			if (!chars_) {
@@ -441,6 +447,7 @@ public:
 					append_chars(CharPart::CDATA, left, ptr_);
 					ptr_ += 3;
 					chars_ = nullptr;
+					state_ = Characters;
 					return true;
 				}
 			}
@@ -452,8 +459,9 @@ public:
 					while (ptr_ + 2 < end_ && memcmp(ptr_, "-->", 3) != 0) {
 						ptr_++;
 					}
-					append_chars(CharPart::Text, left, ptr_);
+					append_chars(CharPart::Comment, left, ptr_);
 					ptr_ += 3;
+					chars_ = nullptr;
 					state_ = Comment;
 					return true;
 				}
@@ -537,6 +545,8 @@ public:
 						ptr_++;
 						if (ptr_ < end_ && *ptr_ == '>') {
 							ptr_++;
+							stack_.push_back(std::string(element_name_));
+							stack_.back().atts = std::move(atts);
 							state_ = Declaration;
 							return true;
 						}
@@ -586,6 +596,10 @@ public:
 	StateType state() const
 	{
 		return state_;
+	}
+	bool is_declaration() const
+	{
+		return state() == Declaration;
 	}
 	bool is_start_element() const
 	{

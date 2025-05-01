@@ -6,4 +6,4 @@ SOURCES += \
 	main.cpp
 
 HEADERS += \
-	xstream.h
+	include/xstream.h

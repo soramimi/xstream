@@ -59,8 +59,7 @@ void test2()
 	std::string xml = R"---(<hoge>abc<fuga foo='bar'>def</fuga>ghi</hoge>)---";
 	xstream::Reader r(xml);
 	while (r.next()) {
-		if (r.match("/hoge")) {
-		} else if (r.is_end_element()) {
+		if (r.is_end_element()) {
 			printf("%s: %s\n", r.path().c_str(), r.text().c_str());
 			for (auto const &a : r.attributes()) {
 				printf("%s: %s\n", a.first.c_str(), std::string(a.second).c_str());
@@ -71,6 +70,6 @@ void test2()
 
 int main()
 {
-	test1();
+	test2();
 	return 0;
 }

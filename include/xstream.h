@@ -408,8 +408,44 @@ public:
 		end_ = s.data() + s.size();
 		init(begin_, end_);
 	}
+	int depth() const
+	{
+		return (int)stack_.size();
+	}
+	struct D {
+		std::vector<int> depth_stack;
+		bool hold;
+	} d;
+	void hold()
+	{
+		d.hold = true;
+	}
+	void nest()
+	{
+		d.depth_stack.push_back(depth());
+	}
 
 	bool next()
+	{
+		if (d.hold) {
+			d.hold = false;
+			return true;
+		}
+		if (_internal_next()) {
+			if (d.depth_stack.empty()) return true;
+			int e = depth();
+			if (state_ == EndElement && e > 0) {
+				e--;
+			}
+			if (e >= d.depth_stack.back()) {
+				return true;
+			}
+			d.depth_stack.pop_back();
+			hold();
+		}
+		return false;
+	}
+	bool _internal_next()
 	{
 		assert(!stack_.empty()); // least one element
 		if (state_ == EndElement) {
@@ -633,7 +669,7 @@ public:
 	{
 		return current_path();
 	}
-	bool match(char const *path) const
+	bool match_start(char const *path) const
 	{
 		return is_start_element() && match_internal(path);
 	}
@@ -644,6 +680,14 @@ public:
 	std::string name() const
 	{
 		return std::string(element_name_);
+	}
+	bool is_name(char const *s) const
+	{
+		size_t n = element_name_.size();
+		for (size_t i = 0; i < n; i++) {
+			if (s[i] != element_name_[i]) return false;
+		}
+		return s[n] == 0;
 	}
 	std::string text() const
 	{

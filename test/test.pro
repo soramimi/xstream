@@ -5,6 +5,7 @@
 TEMPLATE = app
 TARGET = test2
 CONFIG -= qt
+CONFIG += console
 
 LIBS += -lgtest
 

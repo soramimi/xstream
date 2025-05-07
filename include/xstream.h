@@ -731,6 +731,7 @@ private:
 	std::vector<char> line_;
 	bool inside_tag_ = false;
 	size_t newline_ = false;
+	int indent_step_ = 4;
 	std::vector<std::string> element_stack_;
 	void write_line(std::string_view const &s)
 	{
@@ -738,7 +739,7 @@ private:
 	}
 	void write_indent(size_t n)
 	{
-		n *= 2;
+		n *= indent_step_;
 		if (newline_) {
 			n++;
 		}
@@ -768,6 +769,8 @@ public:
 	}
 	void start_document()
 	{
+		std::string s = R"---(<?xml version="1.0" encoding="UTF-8"?>)---" "\n";
+		write_line(s);
 	}
 	void end_document()
 	{
@@ -830,6 +833,20 @@ public:
 			write_line(html_encode(value));
 			write_line("\"");
 		}
+	}
+	void element(std::string const &name, std::function<void ()> fn)
+	{
+		start_element(name);
+		if (fn) {
+			fn();
+		}
+		end_element();
+	}
+	void text_element(std::string const &name, std::string const &text)
+	{
+		element(name, [&](){
+			write_characters(text);
+		});
 	}
 }; // class Writer
 

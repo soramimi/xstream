@@ -1,3 +1,6 @@
+// Xstream - Header-only Streaming pull-based XML/HTML Parser and Generator
+// Copyright (C) 2025 S.Fuchita (soramimi)
+// This software is distributed under the MIT license.
 
 #ifndef XSTREAM_H
 #define XSTREAM_H

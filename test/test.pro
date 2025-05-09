@@ -3,7 +3,7 @@
 ######################################################################
 
 TEMPLATE = app
-TARGET = test2
+TARGET = test
 CONFIG -= qt
 CONFIG += console
 
@@ -17,8 +17,8 @@ win32:CONFIG(release,debug|release):LIBS += -LC:/googletest-1.16.0/build/lib/Rel
 
 HEADERS += \
 	test.h \
-    test.h \
-	../include/jstream.h
+	../include/xstream.h
 SOURCES += \
     test1.cpp \
+    test2.cpp \
     testmain.cpp

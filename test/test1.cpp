@@ -143,7 +143,7 @@ public:
 	}
 	size_t childs() const
 	{
-		return childs();
+		return children_.size();
 	}
 	Node & operator[](size_t i)
 	{

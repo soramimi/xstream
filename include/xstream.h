@@ -465,7 +465,11 @@ public:
 				}
 			}
 		} else if (state_ == Declaration) {
-			reset_stack();
+			if (stack_.size() > 1) {
+				stack_.pop_back();
+			} else {
+				reset_stack();
+			}
 		}
 		while (1) {
 			if (!chars_) {
@@ -508,10 +512,10 @@ public:
 				if (ptr_ < end_ && *ptr_ == '/') {
 					start = *ptr_++;
 				} else {
-					if (ptr_ < end_ && *ptr_ == '?') {
+					if (ptr_ < end_ && (*ptr_ == '?' || *ptr_ == '!')) {
 						start = *ptr_;
-					} else if (ptr_ < end_ && *ptr_ == '!') {
-						start = *ptr_++;
+					// } else if (ptr_ < end_ && *ptr_ == '!') {
+					// 	start = *ptr_++;
 					}
 				}
 				if (ptr_ < end_ && (issymf(*ptr_) || *ptr_ == '?')) {
@@ -580,7 +584,7 @@ public:
 						ptr_++;
 						next_end_element_ = true;
 					}
-					if (start == '?' && ptr_ < end_ && *ptr_ == '?') {
+					if (start == '!' || (start == '?' && ptr_ < end_ && *ptr_ == '?')) {
 						ptr_++;
 						if (ptr_ < end_ && *ptr_ == '>') {
 							ptr_++;

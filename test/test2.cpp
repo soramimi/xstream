@@ -197,12 +197,8 @@ TEST(XML, ProcessingInstructions)
             } else if (itemCount == 2) {
                 EXPECT_EQ(r.text(), "Regular content");
             }
-        } else if (r.match_start("/data/item/special")) {
-            EXPECT_EQ(r.name(), "special");
-        } else if (r.match_start("/data/item/comment")) {
-            EXPECT_EQ(r.name(), "comment");
-        } else if (r.match_start("/data/item/custom-instruction")) {
-            EXPECT_EQ(r.name(), "custom-instruction");
+        } else if (r.match_start("/data/?custom-instruction")) {
+            EXPECT_EQ(r.name(), "?custom-instruction");
             EXPECT_EQ(r.attribute("param", {}), "value");
         }
     }

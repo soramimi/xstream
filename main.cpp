@@ -56,14 +56,37 @@ void test1()
 
 void test2()
 {
-	std::string xml = R"---(<hoge>abc<fuga foo='bar'>def</fuga>ghi</hoge>)---";
-	xstream::Reader r(xml);
+	auto EXPECT_EQ = [](auto a, auto b) {
+		if (a != b) {
+			printf("EXPECT_EQ failed: %s != %s\n", std::string(a).c_str(), std::string(b).c_str());
+		}
+	};
+	
+	std::string_view xml = R"---(<hoge><fuga foo='bar' baz="qux"><![CDATA[Hello, world]]></fuga></hoge>)---";
+	size_t pos = 0;
+	
+	xstream::Reader r;
+	r.parse([&](){
+		if (pos < xml.size()) {
+			size_t n = 1;
+			r.input(std::string_view(xml.data() + pos, n));
+			pos += n;
+		}
+	});
+	
 	while (r.next()) {
-		if (r.is_end_element()) {
-			printf("%s: %s\n", r.path().c_str(), r.text().c_str());
-			for (auto const &a : r.attributes()) {
-				printf("%s: %s\n", a.first.c_str(), std::string(a.second).c_str());
-			}
+		if (r.match_start("/hoge")) {
+			EXPECT_EQ(r.name(), "hoge");
+		} else if (r.match_start("/hoge/fuga")) {
+			EXPECT_EQ(r.name(), "fuga");
+			EXPECT_EQ(r.attribute("foo", {}), "bar");
+			EXPECT_EQ(r.attribute("baz", {}), "qux");
+		} else if (r.match_end("/hoge/fuga")) {
+			EXPECT_EQ(r.attribute("foo", {}), "bar");
+			EXPECT_EQ(r.attribute("baz", {}), "qux");
+			EXPECT_EQ(r.text(), "Hello, world");
+		} else if (r.match_end("/hoge")) {
+			EXPECT_EQ(r.name(), "hoge");
 		}
 	}
 }

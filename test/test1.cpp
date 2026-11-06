@@ -7,6 +7,37 @@
 
 using namespace xstream;
 
+TEST(XML, XML0)
+{
+	std::string_view xml = R"---(<hoge><fuga foo='bar' baz="qux">Hello, world</fuga></hoge>)---";
+	size_t pos = 0;
+	
+	xstream::Reader r;
+	r.parse([&](){
+		if (pos < xml.size()) {
+			size_t n = 1;
+			r.input(std::string_view(xml.data() + pos, n));
+			pos += n;
+		}
+	});
+	
+	while (r.next()) {
+		if (r.match_start("/hoge")) {
+			EXPECT_EQ(r.name(), "hoge");
+		} else if (r.match_start("/hoge/fuga")) {
+			EXPECT_EQ(r.name(), "fuga");
+			EXPECT_EQ(r.attribute("foo", {}), "bar");
+			EXPECT_EQ(r.attribute("baz", {}), "qux");
+		} else if (r.match_end("/hoge/fuga")) {
+			EXPECT_EQ(r.attribute("foo", {}), "bar");
+			EXPECT_EQ(r.attribute("baz", {}), "qux");
+			EXPECT_EQ(r.text(), "Hello, world");
+		} else if (r.match_end("/hoge")) {
+			EXPECT_EQ(r.name(), "hoge");
+		}
+	}
+}
+
 TEST(XML, XML1)
 {
 	std::string xml = R"---(<hoge><fuga foo='bar' baz="qux">Hello, world</fuga></hoge>)---";

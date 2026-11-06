@@ -20,13 +20,13 @@ namespace xstream {
 
 #ifdef __HTMLENCODE_H
 
-inline std::string html_encode(std::string_view const &str)
+inline std::string html_encode(std::string_view str)
 {
 	return ::html_encode(str, true);
 
 }
 
-inline std::string html_decode(std::string_view const &str)
+inline std::string html_decode(std::string_view str)
 {
 	return ::html_decode(str);
 }
@@ -80,7 +80,7 @@ static inline void html_encode_(char const *ptr, char const *end, bool utf8throu
 	}
 }
 
-static inline std::string html_encode(std::string_view const &str, bool utf8through = true)
+static inline std::string html_encode(std::string_view str, bool utf8through = true)
 {
 	char const *begin = str.data();
 	char const *end = begin + str.size();
@@ -136,7 +136,7 @@ static inline void html_decode_(char const *ptr, char const *end, std::vector<ch
 	}
 }
 
-static inline std::string html_decode(std::string_view const &str)
+static inline std::string html_decode(std::string_view str)
 {
 	char const *begin = str.data();
 	char const *end = begin + str.size();
@@ -270,10 +270,10 @@ private:
 	};
 	class EscapedAttributeValue {
 	private:
-		std::string_view sv_;
+		std::string sv_;
 	public:
 		EscapedAttributeValue() = default;
-		EscapedAttributeValue(std::string_view const &sv)
+		EscapedAttributeValue(std::string sv)
 			: sv_(sv)
 		{
 		}
@@ -288,7 +288,7 @@ private:
 	};
 	struct Tag {
 		std::string path;
-		std::vector<std::pair<std::string_view, std::string_view>> atts;
+		std::vector<std::pair<std::string, std::string>> atts;
 		EncodedCharacters chars;
 		Tag() = default;
 		Tag(std::string const &path)
@@ -298,8 +298,12 @@ private:
 	};
 	struct D {
 		bool not_enough_input = false;
+		bool acceptable = false;
+		std::optional<std::vector<char>> input_buffer;
+		std::function<void ()> fn_input_calback;
+		
 		std::vector<int> depth_stack;
-		bool hold;
+		bool hold = false;
 		std::vector<Tag> tag_stack;
 		std::string last_path;
 		char const *begin = nullptr;
@@ -311,6 +315,28 @@ private:
 		std::string_view element_name;
 	} d;
 private:
+	bool is_streaming_input_mode() const
+	{
+		return (bool)d.fn_input_calback;
+	}
+	void need_input() const
+	{
+		if (is_streaming_input_mode()) {
+			d.fn_input_calback();
+		}
+	}
+	int peek_next_char() const
+	{
+		if (d.ptr && d.end && d.ptr < d.end) {
+			return (unsigned char)*d.ptr;
+		}
+		need_input();
+		if (d.ptr && d.end && d.ptr < d.end) {
+			return (unsigned char)*d.ptr;
+		}
+		return -1;
+	}
+	
 	bool issymf(char c)
 	{
 		int d = (unsigned char)c;
@@ -384,7 +410,7 @@ private:
 		assert(!d.tag_stack.empty());
 		d.tag_stack.back().chars.append(type, begin, end);
 	}
-	bool is_element_name(std::string_view const &name) const
+	bool is_element_name(std::string_view name) const
 	{
 		return name == d.element_name;
 	}
@@ -399,6 +425,9 @@ private:
 		return d.tag_stack.back().chars;
 	}
 public:
+	Reader()
+	{
+	}
 	Reader(char const *begin, char const *end)
 	{
 		init(begin, end);
@@ -409,11 +438,51 @@ public:
 		init(ptr, ptr + len);
 	}
 
-	Reader(std::string_view const &s)
+	Reader(std::string_view s)
 	{
 		d.begin = s.data();
 		d.end = s.data() + s.size();
 		init(d.begin, d.end);
+	}
+	void parse(std::function<void ()> fn_input_calback)
+	{
+		d = {};
+		init(nullptr, nullptr);
+		d.fn_input_calback = fn_input_calback;
+	}
+	void input(std::string_view in)
+	{
+		if (in.empty()) return;
+		
+		static constexpr size_t EXTRA_ROOM = 200; // reserve extra room to avoid frequent reallocations
+		
+		d.not_enough_input = false;
+		
+		if (d.input_buffer && (d.input_buffer->capacity() - d.input_buffer->size()) >= in.size()) {
+			if (d.ptr && d.end && d.ptr == d.end) {
+				// all previous input has been consumed, reuse the buffer
+				d.input_buffer->assign(in.begin(), in.end());
+				d.begin = d.ptr = d.input_buffer->data();
+			} else {
+				// append new input to the existing buffer
+				d.input_buffer->insert(d.input_buffer->end(), in.begin(), in.end());
+				if (!d.begin) d.begin = d.input_buffer->data();
+				if (!d.ptr)   d.ptr = d.input_buffer->data();
+			}
+			d.end = d.input_buffer->data() + d.input_buffer->size();
+		} else {
+			std::vector<char> newbuf;
+			size_t curr = (d.ptr && d.end) ? (d.end - d.ptr) : 0;
+			newbuf.reserve(curr + in.size() + EXTRA_ROOM);
+			if (curr > 0) {
+				newbuf.assign(d.ptr, d.end); // copy remaining unprocessed data to the new buffer
+			}
+			newbuf.insert(newbuf.end(), in.begin(), in.end()); // append new input data
+			d.input_buffer = std::move(newbuf);
+			d.begin = d.input_buffer->data();
+			d.ptr = d.begin;
+			d.end = d.begin + d.input_buffer->size();
+		}
 	}
 	int depth() const
 	{
@@ -446,11 +515,17 @@ public:
 			d.depth_stack.pop_back();
 			hold();
 		}
+		if (is_streaming_input_mode() && !is_not_enough_input()) {
+			if (state() != EndElement) {
+				return true;
+			}
+		}
 		return false;
 	}
 	bool _internal_next()
 	{
 		assert(!d.tag_stack.empty()); // least one element
+		d.acceptable = false;
 		if (d.state == EndElement) {
 			size_t i = d.tag_stack.size();
 			while (i > 1) {
@@ -460,6 +535,7 @@ public:
 				if (s > n) {
 					if (d.tag_stack[i].path[s - n - 1] == '/' && memcmp(&d.tag_stack[i].path[s - n], d.element_name.data(), n) == 0) {
 						d.tag_stack.resize(i);
+						d.state = None;
 						break;
 					}
 				}
@@ -471,6 +547,7 @@ public:
 				reset_stack();
 			}
 		}
+		bool not_enough_input = false;
 		while (1) {
 			if (!d.chars) {
 				d.chars = d.ptr;
@@ -481,164 +558,200 @@ public:
 				return true;
 			}
 			if (d.ptr + 9 < d.end && *d.ptr == '<') {
-				if (memcmp(d.ptr, "<![CDATA[", 9) == 0) {
-					d.ptr += 9;
-					char const *left = d.ptr;
-					while (d.ptr + 2 < d.end && memcmp(d.ptr, "]]>", 3) != 0) {
-						d.ptr++;
+				char const *p = d.ptr;
+				if (memcmp(p, "<![CDATA[", 9) == 0) {
+					p += 9;
+					char const *left = p;
+					while (p + 2 < d.end) {
+						if (memcmp(p, "]]>", 3) == 0) {
+							append_chars(CharPart::CDATA, left, p);
+							p += 3;
+							d.chars = nullptr;
+							d.state = Characters;
+							d.ptr = p;
+							return true;
+						}
+						p++;
 					}
-					append_chars(CharPart::CDATA, left, d.ptr);
-					d.ptr += 3;
-					d.chars = nullptr;
-					d.state = Characters;
-					return true;
+					not_enough_input = true;
+					break;
 				}
 			}
 			if (d.ptr < d.end && *d.ptr == '<') {
-				d.ptr++;
-				if (d.ptr + 3 < d.end && memcmp(d.ptr, "!--", 3) == 0) {
-					d.ptr += 3;
-					char const *left = d.ptr;
-					while (d.ptr + 2 < d.end && memcmp(d.ptr, "-->", 3) != 0) {
-						d.ptr++;
+				char const *p = d.ptr + 1;
+				if (p + 3 < d.end && memcmp(p, "!--", 3) == 0) {
+					p += 3;
+					char const *left = p;
+					while (p + 2 < d.end && memcmp(p, "-->", 3) != 0) {
+						p++;
 					}
-					append_chars(CharPart::Comment, left, d.ptr);
-					d.ptr += 3;
+					append_chars(CharPart::Comment, left, p);
+					p += 3;
 					d.chars = nullptr;
 					d.state = Comment;
+					d.ptr = p;
 					return true;
 				}
 				char start = 0;
-				if (d.ptr < d.end && *d.ptr == '/') {
-					start = *d.ptr++;
+				if (p < d.end && *p == '/') {
+					start = *p++;
 				} else {
-					if (d.ptr < d.end && (*d.ptr == '?' || *d.ptr == '!')) {
-						start = *d.ptr;
-					// } else if (ptr_ < end_ && *ptr_ == '!') {
-					// 	start = *ptr_++;
+					if (p < d.end && (*p == '?' || *p == '!')) {
+						start = *p;
 					}
 				}
-				if (d.ptr < d.end && (issymf(*d.ptr) || *d.ptr == '?')) {
-					char const *left = d.ptr++;
-					while (d.ptr < d.end && issym(*d.ptr)) {
-						d.ptr++;
+				if (p < d.end && (issymf(*p) || start == '?' || start == '!')) {
+					char const *left = p++;
+					while (p < d.end && issym(*p)) {
+						p++;
 					}
-					d.element_name = std::string_view(left, d.ptr - left);
+					d.element_name = std::string_view(left, p - left);
+					if (p == d.end) {
+						not_enough_input = true;
+						break;
+					}
 					std::vector<std::pair<std::string_view, std::string_view>> atts;
-					while (d.ptr < d.end && isspace((unsigned char)*d.ptr)) {
-						d.ptr++;
-						while (d.ptr < d.end && isspace((unsigned char)*d.ptr)) {
-							d.ptr++;
+					while (p < d.end && isspace((unsigned char)*p)) {
+						p++;
+						while (p < d.end && isspace((unsigned char)*p)) {
+							p++;
 						}
 						char const *eq = nullptr;
 						char quote = 0;
-						if (start != '/' && d.ptr < d.end && issymf(*d.ptr)) {
-							char const *left = d.ptr++;
-							d.ptr++;
-							while (d.ptr < d.end) {
+						if (start != '/' && p < d.end && issymf(*p)) {
+							char const *left = p++;
+							p++;
+							while (p < d.end) {
 								if (!eq) {
-									if (*d.ptr == '=') {
-										eq = d.ptr;
-										d.ptr++;
-										if (d.ptr < d.end) {
-											char q = *d.ptr;
+									if (*p == '=') {
+										eq = p;
+										p++;
+										if (p < d.end) {
+											char q = *p;
 											if (q == '\'' || q == '\"') {
 												quote = q;
-												d.ptr++;
+												p++;
 											}
 										}
-									} else if (isspace(*d.ptr) || *d.ptr == '>' || *d.ptr == '/') {
+									} else if (isspace(*p) || *p == '>' || *p == '/') {
 										break;
 									} else {
-										d.ptr++;
+										p++;
 									}
-								} else if (quote != 0 ? (*d.ptr == quote) : (isspace((unsigned char)*d.ptr) || *d.ptr == '>' || *d.ptr == '/')) {
-									if (*d.ptr == quote) {
-										d.ptr++;
+								} else if (quote != 0 ? (*p == quote) : (isspace((unsigned char)*p) || *p == '>' || *p == '/')) {
+									if (*p == quote) {
+										p++;
 									}
 									std::string_view key;
 									std::string_view val;
 									if (eq) {
 										key = std::string_view(left, eq - left);
 										char const *left = eq + 1;
-										char const *right = d.ptr;
+										char const *right = p;
 										if (left + 1 < right && left[0] == quote && right[-1] == quote) {
 											left++;
 											right--;
 										}
 										val = std::string_view(left, right - left);
 									} else {
-										key = std::string_view(left, d.ptr - left);
+										key = std::string_view(left, p - left);
 									}
 									atts.emplace_back(key, val);
 									break;
 								} else {
-									d.ptr++;
+									p++;
 								}
 							}
 						} else {
 							break;
 						}
 					}
-					if (d.ptr < d.end && *d.ptr == '/') {
-						d.ptr++;
+					if (p < d.end && *p == '/') {
+						p++;
 						d.next_end_element = true;
 					}
-					if (start == '!' || (start == '?' && d.ptr < d.end && *d.ptr == '?')) {
-						d.ptr++;
-						if (d.ptr < d.end && *d.ptr == '>') {
-							d.ptr++;
-							d.tag_stack.push_back(std::string(d.element_name));
-							d.tag_stack.back().atts = std::move(atts);
+					if (start == '!' || (start == '?' && p < d.end && *p == '?')) {
+						if (start == '?') {
+							p++;
+						}
+						if (p < d.end && *p == '>') {
+							p++;
+							d.tag_stack.push_back(current_path() + '/' + std::string(d.element_name));
+							// d.tag_stack.back().atts = std::move(atts);
+							d.tag_stack.back().atts.clear();
+							for (auto const &attr : atts) {
+								d.tag_stack.back().atts.emplace_back(std::string(attr.first), std::string(attr.second));
+							}
 							d.state = Declaration;
+							d.ptr = p;
+							d.acceptable = true;
 							return true;
 						}
 					}
-					if (d.ptr < d.end && *d.ptr == '>') {
-						d.ptr++;
+					if (p < d.end && *p == '>') {
+						p++;
 						d.chars = nullptr;
 						if (start == '/') {
 							d.state = EndElement;
 						} else {
 							d.tag_stack.push_back(current_path() + '/' + std::string(d.element_name));
-							d.tag_stack.back().atts = std::move(atts);
+							d.tag_stack.back().atts.clear();
+							for (auto const &attr : atts) {
+								d.tag_stack.back().atts.emplace_back(std::string(attr.first), std::string(attr.second));
+							}
 							d.state = StartElement;
 						}
+						d.ptr = p;
+						d.acceptable = true;
 						return true;
 					}
 				}
-				d.state = Error;
-				return true;
+				not_enough_input = true;
+				break;
 			} else if (d.ptr < d.end) {
 				if (d.state == EndElement) {
 					d.last_path = {};
 				}
+				char const *p = d.ptr;
 				while (1) {
 					int c = -1;
-					if (d.ptr < d.end) {
-						c = (unsigned char)*d.ptr;
+					if (p < d.end) {
+						c = (unsigned char)*p;
 					}
 					if (c == -1) {
-						d.state = None;
-						return false;
+						d.chars = nullptr;
+						not_enough_input = true;
+						break;
 					}
 					if (c == '<') {
-						append_chars(CharPart::Text, d.chars, d.ptr);
+						append_chars(CharPart::Text, d.chars, p);
 						d.chars = nullptr;
 						d.state = Characters;
+						d.ptr = p;
 						return true;
 					}
-					d.ptr++;
+					p++;
 				}
+				break;
 			} else {
-				d.state = None;
-				return false;
+				not_enough_input = true;
+				break;
 			}
 		}
+		if (not_enough_input) {
+			d.not_enough_input = true;
+			need_input();
+			return false;
+		}
+		return false;
 	}
 	StateType state() const
 	{
 		return d.state;
+	}
+	bool is_not_enough_input() const
+	{
+		return d.not_enough_input;
 	}
 	bool is_declaration() const
 	{
@@ -660,11 +773,11 @@ public:
 	{
 		return is_end_element() && is_element_name(name);
 	}
-	bool is_start_element(std::string_view const &name) const
+	bool is_start_element(std::string_view name) const
 	{
 		return is_start_element() && is_element_name(name);
 	}
-	bool is_end_element(std::string_view const &name) const
+	bool is_end_element(std::string_view name) const
 	{
 		return is_end_element() && is_element_name(name);
 	}
@@ -678,11 +791,11 @@ public:
 	}
 	bool match_start(char const *path) const
 	{
-		return is_start_element() && match_internal(path);
+		return d.acceptable && (is_start_element() || is_declaration()) && match_internal(path);
 	}
 	bool match_end(char const *path) const
 	{
-		return is_end_element() && match_internal(path);
+		return d.acceptable && is_end_element() && match_internal(path);
 	}
 	std::string name() const
 	{
@@ -706,7 +819,7 @@ public:
 		if (d.tag_stack.back().chars.chars_.empty()) return {};
 		return d.tag_stack.back().chars.chars_.back();
 	}
-	std::optional<EscapedAttributeValue> attribute(std::string_view const &name) const
+	std::optional<EscapedAttributeValue> attribute(std::string_view name) const
 	{
 		assert(!d.tag_stack.empty());
 		for (auto const &attr : d.tag_stack.back().atts) {
@@ -716,7 +829,7 @@ public:
 		}
 		return std::nullopt;
 	}
-	std::string attribute(std::string_view const &name, std::string const &defval) const
+	std::string attribute(std::string_view name, std::string const &defval) const
 	{
 		auto s = attribute(name);
 		return s ? (std::string)*s : defval;
@@ -740,7 +853,7 @@ private:
 	size_t newline_ = false;
 	int indent_step_ = 4;
 	std::vector<std::string> element_stack_;
-	void write_line(std::string_view const &s)
+	void write_line(std::string_view s)
 	{
 		line_.insert(line_.end(), s.begin(), s.end());
 	}
@@ -825,13 +938,13 @@ public:
 			newline_ = true;
 		}
 	}
-	void write_characters(std::string_view const &s)
+	void write_characters(std::string_view s)
 	{
 		close_tag();
 		newline_ = false;
 		write_line(html_encode(s));
 	}
-	void write_attribute(std::string_view const &name, std::string_view const &value)
+	void write_attribute(std::string_view name, std::string_view value)
 	{
 		if (inside_tag_) {
 			write_line(" ");

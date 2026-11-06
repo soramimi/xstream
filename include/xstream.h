@@ -1,5 +1,5 @@
 // Xstream - Header-only Streaming pull-based XML/HTML Parser and Generator
-// Copyright (C) 2025 S.Fuchita (soramimi)
+// Copyright (C) 2026 S.Fuchita (soramimi)
 // This software is distributed under the MIT license.
 
 #ifndef XSTREAM_H
@@ -194,13 +194,6 @@ public:
 		Declaration
 	};
 private:
-	char const *begin_ = nullptr;
-	char const *end_ = nullptr;
-	char const *ptr_ = nullptr;
-	char const *chars_ = nullptr;
-	StateType state_ = None;
-	bool next_end_element_ = false;
-	std::string_view element_name_;
 	struct CharPart {
 		enum Type {
 			Text,
@@ -231,7 +224,6 @@ private:
 			return {};
 		}
 	};
-public:
 	class EncodedCharacters {
 		friend class Reader;
 	private:
@@ -294,7 +286,6 @@ public:
 			return to_string();
 		}
 	};
-private:
 	struct Tag {
 		std::string path;
 		std::vector<std::pair<std::string_view, std::string_view>> atts;
@@ -305,8 +296,21 @@ private:
 		{
 		}
 	};
-	std::vector<Tag> stack_;
-	std::string last_path_;
+	struct D {
+		bool not_enough_input = false;
+		std::vector<int> depth_stack;
+		bool hold;
+		std::vector<Tag> tag_stack;
+		std::string last_path;
+		char const *begin = nullptr;
+		char const *end = nullptr;
+		char const *ptr = nullptr;
+		char const *chars = nullptr;
+		StateType state = None;
+		bool next_end_element = false;
+		std::string_view element_name;
+	} d;
+private:
 	bool issymf(char c)
 	{
 		int d = (unsigned char)c;
@@ -336,29 +340,29 @@ private:
 	}
 	void reset_stack()
 	{
-		stack_.clear();
-		stack_.push_back({});
-		last_path_.clear();
+		d.tag_stack.clear();
+		d.tag_stack.push_back({});
+		d.last_path.clear();
 	}
 	void init(char const *begin, char const *end)
 	{
-		begin_ = begin;
-		end_ = end;
-		ptr_ = begin_;
+		d.begin = begin;
+		d.end = end;
+		d.ptr = d.begin;
 		reset_stack();
 	}
 	std::string const &current_path() const
 	{
-		if (!last_path_.empty()) return last_path_;
-		if (stack_.empty()) return last_path_; // empty string
-		return stack_.back().path;
+		if (!d.last_path.empty()) return d.last_path;
+		if (d.tag_stack.empty()) return d.last_path; // empty string
+		return d.tag_stack.back().path;
 	}
 	void pop_path()
 	{
-		if (!last_path_.empty()) {
-			last_path_.clear();
-		} else if (!stack_.empty()) {
-			stack_.pop_back();
+		if (!d.last_path.empty()) {
+			d.last_path.clear();
+		} else if (!d.tag_stack.empty()) {
+			d.tag_stack.pop_back();
 		}
 	}
 	bool match_internal(char const *path) const
@@ -377,22 +381,22 @@ private:
 	}
 	void append_chars(CharPart::Type type, char const *begin, char const *end)
 	{
-		assert(!stack_.empty());
-		stack_.back().chars.append(type, begin, end);
+		assert(!d.tag_stack.empty());
+		d.tag_stack.back().chars.append(type, begin, end);
 	}
 	bool is_element_name(std::string_view const &name) const
 	{
-		return name == element_name_;
+		return name == d.element_name;
 	}
 	bool is_element_name(char const *name) const
 	{
-		size_t n = element_name_.size();
-		return strncmp(name, element_name_.data(), n) == 0 && name[n] == 0;
+		size_t n = d.element_name.size();
+		return strncmp(name, d.element_name.data(), n) == 0 && name[n] == 0;
 	}
 	EncodedCharacters const &encoded_chars() const
 	{
-		assert(!stack_.empty());
-		return stack_.back().chars;
+		assert(!d.tag_stack.empty());
+		return d.tag_stack.back().chars;
 	}
 public:
 	Reader(char const *begin, char const *end)
@@ -407,18 +411,14 @@ public:
 
 	Reader(std::string_view const &s)
 	{
-		begin_ = s.data();
-		end_ = s.data() + s.size();
-		init(begin_, end_);
+		d.begin = s.data();
+		d.end = s.data() + s.size();
+		init(d.begin, d.end);
 	}
 	int depth() const
 	{
-		return (int)stack_.size();
+		return (int)d.tag_stack.size();
 	}
-	struct D {
-		std::vector<int> depth_stack;
-		bool hold;
-	} d;
 	void hold()
 	{
 		d.hold = true;
@@ -437,7 +437,7 @@ public:
 		if (_internal_next()) {
 			if (d.depth_stack.empty()) return true;
 			int e = depth();
-			if (state_ == EndElement && e > 0) {
+			if (d.state == EndElement && e > 0) {
 				e--;
 			}
 			if (e >= d.depth_stack.back()) {
@@ -450,195 +450,195 @@ public:
 	}
 	bool _internal_next()
 	{
-		assert(!stack_.empty()); // least one element
-		if (state_ == EndElement) {
-			size_t i = stack_.size();
+		assert(!d.tag_stack.empty()); // least one element
+		if (d.state == EndElement) {
+			size_t i = d.tag_stack.size();
 			while (i > 1) {
 				i--;
-				size_t s = stack_[i].path.size();
-				size_t n = element_name_.size();
+				size_t s = d.tag_stack[i].path.size();
+				size_t n = d.element_name.size();
 				if (s > n) {
-					if (stack_[i].path[s - n - 1] == '/' && memcmp(&stack_[i].path[s - n], element_name_.data(), n) == 0) {
-						stack_.resize(i);
+					if (d.tag_stack[i].path[s - n - 1] == '/' && memcmp(&d.tag_stack[i].path[s - n], d.element_name.data(), n) == 0) {
+						d.tag_stack.resize(i);
 						break;
 					}
 				}
 			}
-		} else if (state_ == Declaration) {
-			if (stack_.size() > 1) {
-				stack_.pop_back();
+		} else if (d.state == Declaration) {
+			if (d.tag_stack.size() > 1) {
+				d.tag_stack.pop_back();
 			} else {
 				reset_stack();
 			}
 		}
 		while (1) {
-			if (!chars_) {
-				chars_ = ptr_;
+			if (!d.chars) {
+				d.chars = d.ptr;
 			}
-			if (next_end_element_) {
-				next_end_element_ = false;
-				state_ = EndElement;
+			if (d.next_end_element) {
+				d.next_end_element = false;
+				d.state = EndElement;
 				return true;
 			}
-			if (ptr_ + 9 < end_ && *ptr_ == '<') {
-				if (memcmp(ptr_, "<![CDATA[", 9) == 0) {
-					ptr_ += 9;
-					char const *left = ptr_;
-					while (ptr_ + 2 < end_ && memcmp(ptr_, "]]>", 3) != 0) {
-						ptr_++;
+			if (d.ptr + 9 < d.end && *d.ptr == '<') {
+				if (memcmp(d.ptr, "<![CDATA[", 9) == 0) {
+					d.ptr += 9;
+					char const *left = d.ptr;
+					while (d.ptr + 2 < d.end && memcmp(d.ptr, "]]>", 3) != 0) {
+						d.ptr++;
 					}
-					append_chars(CharPart::CDATA, left, ptr_);
-					ptr_ += 3;
-					chars_ = nullptr;
-					state_ = Characters;
+					append_chars(CharPart::CDATA, left, d.ptr);
+					d.ptr += 3;
+					d.chars = nullptr;
+					d.state = Characters;
 					return true;
 				}
 			}
-			if (ptr_ < end_ && *ptr_ == '<') {
-				ptr_++;
-				if (ptr_ + 3 < end_ && memcmp(ptr_, "!--", 3) == 0) {
-					ptr_ += 3;
-					char const *left = ptr_;
-					while (ptr_ + 2 < end_ && memcmp(ptr_, "-->", 3) != 0) {
-						ptr_++;
+			if (d.ptr < d.end && *d.ptr == '<') {
+				d.ptr++;
+				if (d.ptr + 3 < d.end && memcmp(d.ptr, "!--", 3) == 0) {
+					d.ptr += 3;
+					char const *left = d.ptr;
+					while (d.ptr + 2 < d.end && memcmp(d.ptr, "-->", 3) != 0) {
+						d.ptr++;
 					}
-					append_chars(CharPart::Comment, left, ptr_);
-					ptr_ += 3;
-					chars_ = nullptr;
-					state_ = Comment;
+					append_chars(CharPart::Comment, left, d.ptr);
+					d.ptr += 3;
+					d.chars = nullptr;
+					d.state = Comment;
 					return true;
 				}
 				char start = 0;
-				if (ptr_ < end_ && *ptr_ == '/') {
-					start = *ptr_++;
+				if (d.ptr < d.end && *d.ptr == '/') {
+					start = *d.ptr++;
 				} else {
-					if (ptr_ < end_ && (*ptr_ == '?' || *ptr_ == '!')) {
-						start = *ptr_;
+					if (d.ptr < d.end && (*d.ptr == '?' || *d.ptr == '!')) {
+						start = *d.ptr;
 					// } else if (ptr_ < end_ && *ptr_ == '!') {
 					// 	start = *ptr_++;
 					}
 				}
-				if (ptr_ < end_ && (issymf(*ptr_) || *ptr_ == '?')) {
-					char const *left = ptr_++;
-					while (ptr_ < end_ && issym(*ptr_)) {
-						ptr_++;
+				if (d.ptr < d.end && (issymf(*d.ptr) || *d.ptr == '?')) {
+					char const *left = d.ptr++;
+					while (d.ptr < d.end && issym(*d.ptr)) {
+						d.ptr++;
 					}
-					element_name_ = std::string_view(left, ptr_ - left);
+					d.element_name = std::string_view(left, d.ptr - left);
 					std::vector<std::pair<std::string_view, std::string_view>> atts;
-					while (ptr_ < end_ && isspace((unsigned char)*ptr_)) {
-						ptr_++;
-						while (ptr_ < end_ && isspace((unsigned char)*ptr_)) {
-							ptr_++;
+					while (d.ptr < d.end && isspace((unsigned char)*d.ptr)) {
+						d.ptr++;
+						while (d.ptr < d.end && isspace((unsigned char)*d.ptr)) {
+							d.ptr++;
 						}
 						char const *eq = nullptr;
 						char quote = 0;
-						if (start != '/' && ptr_ < end_ && issymf(*ptr_)) {
-							char const *left = ptr_++;
-							ptr_++;
-							while (ptr_ < end_) {
+						if (start != '/' && d.ptr < d.end && issymf(*d.ptr)) {
+							char const *left = d.ptr++;
+							d.ptr++;
+							while (d.ptr < d.end) {
 								if (!eq) {
-									if (*ptr_ == '=') {
-										eq = ptr_;
-										ptr_++;
-										if (ptr_ < end_) {
-											char q = *ptr_;
+									if (*d.ptr == '=') {
+										eq = d.ptr;
+										d.ptr++;
+										if (d.ptr < d.end) {
+											char q = *d.ptr;
 											if (q == '\'' || q == '\"') {
 												quote = q;
-												ptr_++;
+												d.ptr++;
 											}
 										}
-									} else if (isspace(*ptr_) || *ptr_ == '>' || *ptr_ == '/') {
+									} else if (isspace(*d.ptr) || *d.ptr == '>' || *d.ptr == '/') {
 										break;
 									} else {
-										ptr_++;
+										d.ptr++;
 									}
-								} else if (quote != 0 ? (*ptr_ == quote) : (isspace((unsigned char)*ptr_) || *ptr_ == '>' || *ptr_ == '/')) {
-									if (*ptr_ == quote) {
-										ptr_++;
+								} else if (quote != 0 ? (*d.ptr == quote) : (isspace((unsigned char)*d.ptr) || *d.ptr == '>' || *d.ptr == '/')) {
+									if (*d.ptr == quote) {
+										d.ptr++;
 									}
 									std::string_view key;
 									std::string_view val;
 									if (eq) {
 										key = std::string_view(left, eq - left);
 										char const *left = eq + 1;
-										char const *right = ptr_;
+										char const *right = d.ptr;
 										if (left + 1 < right && left[0] == quote && right[-1] == quote) {
 											left++;
 											right--;
 										}
 										val = std::string_view(left, right - left);
 									} else {
-										key = std::string_view(left, ptr_ - left);
+										key = std::string_view(left, d.ptr - left);
 									}
 									atts.emplace_back(key, val);
 									break;
 								} else {
-									ptr_++;
+									d.ptr++;
 								}
 							}
 						} else {
 							break;
 						}
 					}
-					if (ptr_ < end_ && *ptr_ == '/') {
-						ptr_++;
-						next_end_element_ = true;
+					if (d.ptr < d.end && *d.ptr == '/') {
+						d.ptr++;
+						d.next_end_element = true;
 					}
-					if (start == '!' || (start == '?' && ptr_ < end_ && *ptr_ == '?')) {
-						ptr_++;
-						if (ptr_ < end_ && *ptr_ == '>') {
-							ptr_++;
-							stack_.push_back(std::string(element_name_));
-							stack_.back().atts = std::move(atts);
-							state_ = Declaration;
+					if (start == '!' || (start == '?' && d.ptr < d.end && *d.ptr == '?')) {
+						d.ptr++;
+						if (d.ptr < d.end && *d.ptr == '>') {
+							d.ptr++;
+							d.tag_stack.push_back(std::string(d.element_name));
+							d.tag_stack.back().atts = std::move(atts);
+							d.state = Declaration;
 							return true;
 						}
 					}
-					if (ptr_ < end_ && *ptr_ == '>') {
-						ptr_++;
-						chars_ = nullptr;
+					if (d.ptr < d.end && *d.ptr == '>') {
+						d.ptr++;
+						d.chars = nullptr;
 						if (start == '/') {
-							state_ = EndElement;
+							d.state = EndElement;
 						} else {
-							stack_.push_back(current_path() + '/' + std::string(element_name_));
-							stack_.back().atts = std::move(atts);
-							state_ = StartElement;
+							d.tag_stack.push_back(current_path() + '/' + std::string(d.element_name));
+							d.tag_stack.back().atts = std::move(atts);
+							d.state = StartElement;
 						}
 						return true;
 					}
 				}
-				state_ = Error;
+				d.state = Error;
 				return true;
-			} else if (ptr_ < end_) {
-				if (state_ == EndElement) {
-					last_path_ = {};
+			} else if (d.ptr < d.end) {
+				if (d.state == EndElement) {
+					d.last_path = {};
 				}
 				while (1) {
 					int c = -1;
-					if (ptr_ < end_) {
-						c = (unsigned char)*ptr_;
+					if (d.ptr < d.end) {
+						c = (unsigned char)*d.ptr;
 					}
 					if (c == -1) {
-						state_ = None;
+						d.state = None;
 						return false;
 					}
 					if (c == '<') {
-						append_chars(CharPart::Text, chars_, ptr_);
-						chars_ = nullptr;
-						state_ = Characters;
+						append_chars(CharPart::Text, d.chars, d.ptr);
+						d.chars = nullptr;
+						d.state = Characters;
 						return true;
 					}
-					ptr_++;
+					d.ptr++;
 				}
 			} else {
-				state_ = None;
+				d.state = None;
 				return false;
 			}
 		}
 	}
 	StateType state() const
 	{
-		return state_;
+		return d.state;
 	}
 	bool is_declaration() const
 	{
@@ -686,13 +686,13 @@ public:
 	}
 	std::string name() const
 	{
-		return std::string(element_name_);
+		return std::string(d.element_name);
 	}
 	bool is_name(char const *s) const
 	{
-		size_t n = element_name_.size();
+		size_t n = d.element_name.size();
 		for (size_t i = 0; i < n; i++) {
-			if (s[i] != element_name_[i]) return false;
+			if (s[i] != d.element_name[i]) return false;
 		}
 		return s[n] == 0;
 	}
@@ -702,14 +702,14 @@ public:
 	}
 	CharPart characters() const
 	{
-		assert(!stack_.empty());
-		if (stack_.back().chars.chars_.empty()) return {};
-		return stack_.back().chars.chars_.back();
+		assert(!d.tag_stack.empty());
+		if (d.tag_stack.back().chars.chars_.empty()) return {};
+		return d.tag_stack.back().chars.chars_.back();
 	}
 	std::optional<EscapedAttributeValue> attribute(std::string_view const &name) const
 	{
-		assert(!stack_.empty());
-		for (auto const &attr : stack_.back().atts) {
+		assert(!d.tag_stack.empty());
+		for (auto const &attr : d.tag_stack.back().atts) {
 			if (attr.first == name) {
 				return attr.second;
 			}
@@ -724,8 +724,8 @@ public:
 	std::vector<std::pair<std::string, EscapedAttributeValue>> attributes() const
 	{
 		std::vector<std::pair<std::string, EscapedAttributeValue>> ret;
-		assert(!stack_.empty());
-		for (auto const &attr : stack_.back().atts) {
+		assert(!d.tag_stack.empty());
+		for (auto const &attr : d.tag_stack.back().atts) {
 			ret.emplace_back(std::string(attr.first), attr.second);
 		}
 		return ret;

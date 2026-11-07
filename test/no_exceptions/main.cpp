@@ -56,5 +56,19 @@ int main()
 	if (invalid_width.set_indent_width(xstream::Writer::max_indent_width + 1)
 		|| invalid_width.error().code != xstream::ErrorCode::InvalidOperation
 		|| invalid_width.end_document()) return 12;
+	xstream::Reader empty_input;
+	size_t input_calls = 0;
+	empty_input.parse([&] {
+		if (++input_calls == 1) empty_input.input({});
+	});
+	if (!empty_input.next() || empty_input.state() != xstream::Reader::None
+		|| empty_input.result() != xstream::Reader::ReadResult::NeedInput
+		|| empty_input.is_not_enough_input() || input_calls != 1) return 13;
+	if (empty_input.next() || !empty_input.is_not_enough_input() || input_calls != 2) return 14;
+	empty_input.input("<e/>");
+	if (!empty_input.next() || !empty_input.is_start_element("e")) return 15;
+	if (!empty_input.next() || !empty_input.is_end_element("e")) return 16;
+	empty_input.finish_input();
+	if (empty_input.next() || empty_input.result() != xstream::Reader::ReadResult::EndDocument) return 17;
 	return 0;
 }

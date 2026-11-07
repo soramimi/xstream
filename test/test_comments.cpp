@@ -19,11 +19,18 @@ struct Outcome {
 Outcome drain(Reader *reader)
 {
 	Outcome out;
+	size_t steps = 0;
 	while (reader->next()) {
-		if (out.events.size() >= 100) {
+		if (++steps >= 100) {
 			ADD_FAILURE() << "Reader did not stop";
 			break;
 		}
+		if (reader->result() == Result::NeedInput) {
+			EXPECT_EQ(reader->state(), Reader::None);
+			EXPECT_FALSE(reader->is_not_enough_input());
+			continue;
+		}
+		EXPECT_EQ(reader->result(), Result::Event);
 		out.events.emplace_back(reader->state(), reader->path(),
 			reader->is_end_element() ? reader->text() : std::string());
 		if (reader->state() == Reader::Comment) {

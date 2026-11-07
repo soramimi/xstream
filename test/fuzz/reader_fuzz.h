@@ -190,11 +190,16 @@ inline Outcome callback(std::string_view xml, Config const &config, std::vector<
 	Reader reader(config.limits);
 	reader.set_allow_invalid_comments(config.permissive());
 	size_t position = 0, chunk = 0, calls = 0;
-	bool stall = true;
+	bool stall = true, empty_input = false;
 	reader.parse([&] {
 		require(++calls <= xml.size() * 2 + 4, "excessive input requests");
+		empty_input = false;
 		stall = !stall;
-		if (!stall) return; // A no-progress callback must yield NeedInput, not EOF.
+		if (!stall) {
+			empty_input = calls % 4 == 1;
+			if (empty_input) reader.input({});
+			return; // Both cases yield NeedInput, with distinct waiting flags.
+		}
 		if (chunk == chunks.size()) reader.finish_input();
 		else {
 			size_t length = chunks[chunk++];
@@ -203,7 +208,12 @@ inline Outcome callback(std::string_view xml, Config const &config, std::vector<
 		}
 	});
 	Outcome out;
-	do { pump(&reader, &out, xml.size()); } while (out.result == Result::NeedInput);
+	do {
+		pump(&reader, &out, xml.size());
+		if (out.result == Result::NeedInput) {
+			require(reader.is_not_enough_input() != empty_input, "empty input waiting flag is incorrect");
+		}
+	} while (out.result == Result::NeedInput);
 	check_terminal(&reader, out, xml.size());
 	return out;
 }

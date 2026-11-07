@@ -20,11 +20,18 @@ struct Outcome {
 Outcome drain(Reader *reader)
 {
 	Outcome out;
+	size_t steps = 0;
 	while (reader->next()) {
-		if (out.events.size() >= 1000) {
+		if (++steps >= 1000) {
 			ADD_FAILURE() << "Reader did not stop";
 			break;
 		}
+		if (reader->result() == Result::NeedInput) {
+			EXPECT_EQ(reader->state(), Reader::None);
+			EXPECT_FALSE(reader->is_not_enough_input());
+			continue;
+		}
+		EXPECT_EQ(reader->result(), Result::Event);
 		std::vector<std::pair<std::string, std::string>> attributes;
 		for (auto const &a : reader->attributes()) attributes.emplace_back(a.first, a.second.to_string());
 		out.events.emplace_back(reader->state(), reader->path(), reader->name(), attributes,

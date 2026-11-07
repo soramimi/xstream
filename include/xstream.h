@@ -552,6 +552,7 @@ private:
 	bool allow_invalid_comments_ = false;
 	struct D {
 		bool not_enough_input = false;
+		bool empty_input_supplied = false;
 		bool input_finished = false;
 		bool root_seen = false;
 		bool advancing = false;
@@ -854,7 +855,12 @@ public:
 	}
 	void input(std::string_view in)
 	{
-		if (in.empty() || d.state == Error) return;
+		if (d.state == Error) return;
+		if (in.empty()) {
+			d.not_enough_input = false;
+			d.empty_input_supplied = true;
+			return;
+		}
 		if (d.input_finished) {
 			fail(ErrorCode::InvalidOperation, d.input_offset + d.ptr, "Input supplied after EOF");
 			return;
@@ -939,7 +945,9 @@ public:
 
 	bool next()
 	{
-		return advance() == ReadResult::Event;
+		ReadResult result = advance();
+		// Empty input yields control without publishing an XML event.
+		return result == ReadResult::Event || (result == ReadResult::NeedInput && !d.not_enough_input);
 	}
 	ReadResult advance()
 	{
@@ -950,7 +958,8 @@ public:
 		if (d.result == ReadResult::EndDocument) return d.result;
 		detail::FlagGuard guard(&d.advancing);
 		d.result = advance_internal();
-		d.not_enough_input = d.result == ReadResult::NeedInput;
+		d.not_enough_input = d.result == ReadResult::NeedInput && !d.empty_input_supplied;
+		d.empty_input_supplied = false;
 		return d.result;
 	}
 	ReadResult result() const
@@ -974,6 +983,7 @@ private:
 			if (result == ReadResult::NeedInput && d.fn_input_calback) {
 				// The scanner's views have expired before the callback can mutate input.
 				size_t received = d.input_offset + input_size();
+				d.empty_input_supplied = false;
 				d.fn_input_calback();
 				if (d.state == Error) return ReadResult::Error;
 				if (d.input_finished || d.input_offset + input_size() != received) continue;

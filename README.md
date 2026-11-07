@@ -79,9 +79,14 @@ input is supplied or the reader is reset. References returned by `path()` refer
 to the reader's current state and should not be retained across parsing calls.
 
 With `parse(callback)`, `next()` requests more input and resumes parsing until
-it can return a complete event. Refilling the buffer does not produce an event.
-If the callback supplies no additional data, `next()` returns false and
-`is_not_enough_input()` returns true; the caller can supply more input and resume.
+it can return a complete event or the callback supplies no additional bytes.
+Refilling the buffer does not produce an event. Calling `input()` with an empty
+view clears `is_not_enough_input()`. If a callback explicitly supplies empty input
+without finishing the source, `next()` returns true with `state() == None` and
+`result() == ReadResult::NeedInput`, with the waiting flag clear. That call does
+not retry the callback or publish an incomplete token. If the callback makes no
+`input()` call, `next()` returns false with `NeedInput` and the waiting flag set.
+The caller can supply more input and resume in either case.
 Self-closing elements produce one start event followed by one end event, after
 the complete `/>` has been received.
 
@@ -241,8 +246,11 @@ explicitly unsupported.
 ### Completion and errors
 
 `advance()` reports progress separately from the event type returned by `state()`.
-`next()` remains available and returns true exactly when `advance()` would return
-`ReadResult::Event`. After it returns false, inspect `result()`:
+`next()` returns true for a complete event or an explicit empty-input notification.
+Inspect `result()` to distinguish them: only `ReadResult::Event` exposes an event;
+`NeedInput` with a clear `is_not_enough_input()` flag acknowledges empty input.
+`advance()` still returns `NeedInput` for that notification. After `next()` returns
+false, inspect `result()` for waiting, subtree completion, document end, or error:
 
 | `Reader::ReadResult` | Meaning |
 | --- | --- |
@@ -258,6 +266,17 @@ input. Call `finish_input()` when the source reaches EOF, including from inside
 the callback. Neither an empty `input()` call nor a callback returning without
 data means EOF. A closed root alone does not finish a streaming document.
 
+An empty `input()` outside a callback also supplies one notification, consumed
+by the next advance. If that advance needs input without requesting a callback,
+it returns `NeedInput` with the waiting flag clear, and `next()` returns true.
+A further advance that still needs input without another input call sets the
+waiting flag and `next()` returns false. If parsing requests a callback, its
+latest invocation determines whether empty input was supplied. Empty-input
+notifications never override EOF, `EndDocument`, `SubtreeEnd`, or errors.
+`parse()` clears pending
+notifications. A callback that always calls empty `input()` makes each `next()`
+return true once; the caller controls when to retry.
+
 ```cpp
 std::string_view xml = "<root><item>text</item></root>";
 size_t pos = 0;
@@ -271,6 +290,7 @@ reader.parse([&] {
 });
 
 while (reader.next()) {
+    if (reader.result() == xstream::Reader::ReadResult::NeedInput) continue;
     if (reader.is_end_element()) {
         printf("%s: %s\n", reader.path().c_str(), reader.text().c_str());
     }
@@ -453,7 +473,7 @@ The `xstream::Reader` class provides the following key methods:
 - `parse(callback)`: Reset for streaming input; the callback supplies data or signals EOF
 - `input(chunk)`, `finish_input()`, `input_error(message)`: Supply bytes or report source completion/failure
 - `advance()`, `result()`: Advance and inspect the progress result
-- `next()`: Advance to an event; false can mean waiting, subtree end, document end, or error
+- `next()`: Advance to an event or acknowledge explicit empty input; inspect `result()` to distinguish them
 - `error()`: Get the first error's code, byte offset, and message
 - `Limits`, `set_limits()`, `limits()`: Configure and inspect resource limits before input
 - `statistics()`: Inspect work counters and current retained payload sizes

@@ -78,8 +78,10 @@ Mutating the same input changes both XML bytes and how they are supplied.
 - Borrowed whole-document input, pushed chunks, and callback chunks must return
   the same event types, names, paths, attribute order/values, text fragments,
   accumulated text, final result, and first error code/offset/message.
-- Callback runs deliberately alternate input delivery with no progress. Such a
-  callback must yield `NeedInput`, retain partial parsing state, and resume.
+- Callback runs alternate data delivery with either an explicit empty `input()`
+  call or no input call. Both return `NeedInput`, preserve partial parsing state,
+  and resume; the waiting flag must be clear for explicit empty input and set
+  when no input was supplied.
 - Every parsing step checks buffer capacity, retained text/attributes/fragments,
   path size, name/value/count/depth limits, and bounded scan/copy counters.
 - Outside-root whitespace must produce no accumulated text or retained text

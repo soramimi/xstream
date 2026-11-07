@@ -11,10 +11,16 @@ using Event = std::tuple<Reader::StateType, std::string, std::string,
 std::vector<Event> collect_events(Reader *reader)
 {
 	std::vector<Event> events;
+	size_t steps = 0;
 	while (reader->next()) {
-		if (events.size() >= 1000) {
+		if (++steps >= 1000) {
 			ADD_FAILURE() << "Reader did not stop";
 			break;
+		}
+		if (reader->result() == Reader::ReadResult::NeedInput) {
+			EXPECT_EQ(reader->state(), Reader::None);
+			EXPECT_FALSE(reader->is_not_enough_input());
+			continue;
 		}
 		EXPECT_NE(reader->state(), Reader::None);
 		EXPECT_EQ(reader->is_start_element(), reader->state() == Reader::StartElement);
@@ -174,17 +180,24 @@ TEST(StreamingEvents, NoProgressReturnsWithoutRepeatingAnEvent)
 	EXPECT_EQ(reader.state(), Reader::None);
 }
 
-TEST(StreamingEvents, EmptyCallbackAndEmptyInputDoNotCreateEvents)
+TEST(StreamingEvents, EmptyInputYieldsWithoutCreatingEvents)
 {
 	Reader reader;
 	size_t calls = 0;
 	reader.parse([&] { ++calls; reader.input({}); });
-	EXPECT_FALSE(reader.next());
+	EXPECT_TRUE(reader.next());
 	EXPECT_EQ(calls, 1u);
 	EXPECT_EQ(reader.state(), Reader::None);
+	EXPECT_EQ(reader.result(), Reader::ReadResult::NeedInput);
+	EXPECT_FALSE(reader.is_not_enough_input());
 	reader.hold();
-	EXPECT_FALSE(reader.next());
+	EXPECT_TRUE(reader.next());
 	EXPECT_EQ(calls, 2u);
+	EXPECT_EQ(reader.state(), Reader::None);
+	reader.parse([&] { ++calls; });
+	EXPECT_FALSE(reader.next());
+	EXPECT_EQ(calls, 3u);
+	EXPECT_TRUE(reader.is_not_enough_input());
 }
 
 TEST(StreamingEvents, StreamingNestPreservesParentEndForOuterLoop)

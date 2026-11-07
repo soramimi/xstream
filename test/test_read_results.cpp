@@ -241,6 +241,182 @@ TEST(ReadResults, NoProgressCanResumeWithMoreDataOrEof)
 	EXPECT_EQ(calls, 3u);
 }
 
+TEST(ReadResults, EmptyInputClearsWaitingAndYieldsOnceWithoutACallback)
+{
+	Reader reader;
+	EXPECT_FALSE(reader.next());
+	EXPECT_TRUE(reader.is_not_enough_input());
+	reader.input({});
+	EXPECT_FALSE(reader.is_not_enough_input());
+	EXPECT_EQ(reader.result(), Result::NeedInput);
+	EXPECT_TRUE(reader.next());
+	EXPECT_EQ(reader.state(), Reader::None);
+	EXPECT_EQ(reader.result(), Result::NeedInput);
+	EXPECT_FALSE(reader.is_not_enough_input());
+	EXPECT_EQ(reader.statistics().buffer_capacity, 0u);
+	EXPECT_EQ(reader.statistics().copied_input_bytes, 0u);
+	EXPECT_FALSE(reader.next());
+	EXPECT_TRUE(reader.is_not_enough_input());
+	reader.finish_input();
+	EXPECT_FALSE(reader.next());
+	EXPECT_EQ(reader.result(), Result::Error);
+	EXPECT_EQ(reader.error().code, Code::UnexpectedEof);
+	EXPECT_EQ(reader.error().offset, 0u);
+}
+
+TEST(ReadResults, EmptyCallbackInputReturnsToCallerWithoutRetrying)
+{
+	Reader reader;
+	size_t calls = 0;
+	reader.parse([&] {
+		if (++calls <= 2) reader.input({});
+	});
+	for (size_t expected = 1; expected <= 2; ++expected) {
+		EXPECT_TRUE(reader.next());
+		EXPECT_EQ(calls, expected);
+		EXPECT_EQ(reader.state(), Reader::None);
+		EXPECT_EQ(reader.result(), Result::NeedInput);
+		EXPECT_FALSE(reader.is_not_enough_input());
+	}
+	EXPECT_FALSE(reader.next());
+	EXPECT_EQ(calls, 3u);
+	EXPECT_EQ(reader.state(), Reader::None);
+	EXPECT_EQ(reader.result(), Result::NeedInput);
+	EXPECT_TRUE(reader.is_not_enough_input());
+	EXPECT_EQ(reader.statistics().scan_steps, 0u);
+}
+
+TEST(ReadResults, EmptyChunksPreservePartialTokensAndCompleteEvents)
+{
+	Reader reader;
+	std::vector<std::string> chunks = {"", "<r", "", "", " a='&amp;'>", "", "x", "</r>", ""};
+	size_t chunk = 0, calls = 0, steps = 0, yields = 0;
+	reader.parse([&] {
+		++calls;
+		if (chunk < chunks.size()) reader.input(chunks[chunk++]);
+		else reader.finish_input();
+	});
+	std::vector<Reader::StateType> events;
+	while (reader.next()) {
+		ASSERT_LT(++steps, 32u);
+		if (reader.result() == Result::NeedInput) {
+			++yields;
+			EXPECT_EQ(reader.state(), Reader::None);
+			EXPECT_FALSE(reader.is_not_enough_input());
+			continue;
+		}
+		EXPECT_EQ(reader.result(), Result::Event);
+		events.push_back(reader.state());
+		EXPECT_EQ(reader.name(), "r");
+		EXPECT_EQ(reader.path(), "/r");
+		EXPECT_EQ(reader.attribute("a", ""), "&");
+		if (reader.is_characters()) {
+			auto bytes = reader.characters().decode();
+			EXPECT_EQ(std::string(bytes.begin(), bytes.end()), "x");
+		}
+		if (reader.is_end_element()) { EXPECT_EQ(reader.text(), "x"); }
+	}
+	EXPECT_EQ(events, (std::vector<Reader::StateType>{Reader::StartElement, Reader::Characters, Reader::EndElement}));
+	EXPECT_EQ(yields, 5u);
+	EXPECT_EQ(calls, chunks.size() + 1);
+	EXPECT_EQ(chunk, chunks.size());
+	EXPECT_EQ(reader.result(), Result::EndDocument);
+	EXPECT_EQ(reader.error().code, Code::None);
+}
+
+TEST(ReadResults, LastCallbackDeterminesWhetherEmptyInputWasSupplied)
+{
+	Reader reader;
+	size_t calls = 0;
+	reader.input({});
+	reader.parse([&] {
+		if (++calls == 1) {
+			reader.input("<r");
+			reader.input({});
+		}
+	});
+	EXPECT_FALSE(reader.next());
+	EXPECT_EQ(calls, 2u);
+	EXPECT_EQ(reader.state(), Reader::None);
+	EXPECT_TRUE(reader.is_not_enough_input());
+	reader.input("/>");
+	ASSERT_TRUE(reader.next());
+	ASSERT_TRUE(reader.is_start_element("r"));
+	ASSERT_TRUE(reader.next());
+	ASSERT_TRUE(reader.is_end_element("r"));
+	reader.finish_input();
+	EXPECT_FALSE(reader.next());
+	EXPECT_EQ(reader.result(), Result::EndDocument);
+	reader.parse([&] { ++calls; });
+	EXPECT_FALSE(reader.next());
+	EXPECT_TRUE(reader.is_not_enough_input());
+}
+
+TEST(ReadResults, EmptyInputDoesNotHideEofOrSourceErrors)
+{
+	for (bool source_error : {false, true}) {
+		Reader reader;
+		size_t calls = 0;
+		reader.parse([&] {
+			++calls;
+			reader.input({});
+			if (source_error) reader.input_error("source error");
+			else reader.finish_input();
+		});
+		reader.input("<r/>");
+		ASSERT_TRUE(reader.next());
+		ASSERT_TRUE(reader.is_start_element("r"));
+		ASSERT_TRUE(reader.next());
+		ASSERT_TRUE(reader.is_end_element("r"));
+		EXPECT_FALSE(reader.next());
+		EXPECT_EQ(reader.result(), source_error ? Result::Error : Result::EndDocument);
+		EXPECT_EQ(reader.error().code, source_error ? Code::InputError : Code::None);
+		EXPECT_FALSE(reader.is_not_enough_input());
+		auto first = reader.error();
+		reader.input({});
+		EXPECT_FALSE(reader.next());
+		EXPECT_EQ(calls, 1u);
+		EXPECT_EQ(reader.error().code, first.code);
+		EXPECT_EQ(reader.error().offset, first.offset);
+		EXPECT_EQ(reader.error().message, first.message);
+	}
+}
+
+TEST(ReadResults, ParseClearsPendingEmptyInputNotifications)
+{
+	Reader reader;
+	EXPECT_FALSE(reader.next());
+	reader.input({});
+	reader.parse([] {});
+	EXPECT_FALSE(reader.next());
+	EXPECT_EQ(reader.state(), Reader::None);
+	EXPECT_EQ(reader.result(), Result::NeedInput);
+	EXPECT_TRUE(reader.is_not_enough_input());
+}
+
+TEST(ReadResults, EmptyInputDoesNotOverrideSubtreeEnd)
+{
+	Reader reader;
+	reader.input("<r><c/></r>");
+	ASSERT_TRUE(reader.next());
+	ASSERT_TRUE(reader.is_start_element("r"));
+	reader.nest();
+	ASSERT_TRUE(reader.next());
+	ASSERT_TRUE(reader.is_start_element("c"));
+	ASSERT_TRUE(reader.next());
+	ASSERT_TRUE(reader.is_end_element("c"));
+	reader.input({});
+	EXPECT_FALSE(reader.next());
+	EXPECT_EQ(reader.result(), Result::SubtreeEnd);
+	EXPECT_FALSE(reader.is_not_enough_input());
+	ASSERT_TRUE(reader.next());
+	ASSERT_TRUE(reader.is_end_element("r"));
+	EXPECT_EQ(reader.result(), Result::Event);
+	reader.finish_input();
+	EXPECT_FALSE(reader.next());
+	EXPECT_EQ(reader.result(), Result::EndDocument);
+}
+
 TEST(ReadResults, RootClosureAloneDoesNotFinishTheDocument)
 {
 	Reader reader;

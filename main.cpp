@@ -54,7 +54,7 @@ void test1()
 	printf("done\n");
 }
 
-void test2()
+bool test2()
 {
 	auto EXPECT_EQ = [](auto a, auto b) {
 		if (a != b) {
@@ -71,6 +71,8 @@ void test2()
 			size_t n = 1;
 			r.input(std::string_view(xml.data() + pos, n));
 			pos += n;
+		} else {
+			r.finish_input();
 		}
 	});
 	
@@ -89,10 +91,14 @@ void test2()
 			EXPECT_EQ(r.name(), "hoge");
 		}
 	}
+	if (r.result() != xstream::Reader::ReadResult::EndDocument) {
+		fprintf(stderr, "XML parsing failed at byte %zu: %s\n", r.error().offset, r.error().message.c_str());
+		return false;
+	}
+	return true;
 }
 
 int main()
 {
-	test2();
-	return 0;
+	return test2() ? 0 : 1;
 }

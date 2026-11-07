@@ -7,6 +7,10 @@ TARGET = test
 CONFIG -= qt
 CONFIG += console
 
+CPP_STD = c++20
+CONFIG += $$CPP_STD
+gcc:QMAKE_CXXFLAGS += -std=$$CPP_STD -Wall -Wextra
+
 LIBS += -lgtest
 
 INCLUDEPATH += ../include
@@ -18,7 +22,21 @@ win32:CONFIG(release,debug|release):LIBS += -LC:/googletest-1.16.0/build/lib/Rel
 HEADERS += \
 	test.h \
 	../include/xstream.h
+HEADERS += fuzz/reader_fuzz.h
 SOURCES += \
     test1.cpp \
     test2.cpp \
+    test_streaming_safety.cpp \
+    test_reader_constructors.cpp \
+    test_streaming_events.cpp \
+    test_end_tags.cpp \
+    test_read_results.cpp \
+    test_resource_limits.cpp \
+    test_outside_text.cpp \
+    test_comments.cpp \
+    test_xml_syntax.cpp \
+    test_unicode.cpp \
+    test_fuzz.cpp \
+    test_error_status.cpp \
+    test_writer_formatting.cpp \
     testmain.cpp

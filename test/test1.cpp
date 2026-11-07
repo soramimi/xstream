@@ -13,15 +13,18 @@ TEST(XML, XML0)
 	size_t pos = 0;
 	
 	xstream::Reader r;
+	test_support::EventTrace trace(true);
 	r.parse([&](){
 		if (pos < xml.size()) {
 			size_t n = 1;
 			r.input(std::string_view(xml.data() + pos, n));
 			pos += n;
+		} else {
+			r.finish_input();
 		}
 	});
 	
-	while (r.next()) {
+	while (trace.next(&r)) {
 		if (r.match_start("/hoge")) {
 			EXPECT_EQ(r.name(), "hoge");
 		} else if (r.match_start("/hoge/fuga")) {
@@ -36,6 +39,14 @@ TEST(XML, XML0)
 			EXPECT_EQ(r.name(), "hoge");
 		}
 	}
+	EXPECT_EQ(r.result(), xstream::Reader::ReadResult::EndDocument);
+	trace.expect(r, {
+		"start /hoge",
+		"start /hoge/fuga",
+		"text /hoge/fuga",
+		"end /hoge/fuga",
+		"end /hoge",
+	});
 }
 
 TEST(XML, XML1)
@@ -43,7 +54,8 @@ TEST(XML, XML1)
 	std::string xml = R"---(<hoge><fuga foo='bar' baz="qux">Hello, world</fuga></hoge>)---";
 
 	xstream::Reader r(xml);
-	while (r.next()) {
+	test_support::EventTrace trace(true);
+	while (trace.next(&r)) {
 		if (r.match_start("/hoge")) {
 			EXPECT_EQ(r.name(), "hoge");
 		} else if (r.match_start("/hoge/fuga")) {
@@ -58,6 +70,13 @@ TEST(XML, XML1)
 		  EXPECT_EQ(r.name(), "hoge");
 		}
 	}
+	trace.expect(r, {
+		"start /hoge",
+		"start /hoge/fuga",
+		"text /hoge/fuga",
+		"end /hoge/fuga",
+		"end /hoge",
+	});
 }
 
 TEST(XML, XML2)
@@ -65,7 +84,8 @@ TEST(XML, XML2)
 	std::string xml = R"---(<hoge><fuga foo='bar'>Hello, <![CDATA[world]]></fuga></hoge>)---";
 
 	xstream::Reader r(xml);
-	while (r.next()) {
+	test_support::EventTrace trace(true);
+	while (trace.next(&r)) {
 		if (r.match_start("/hoge")) {
 			EXPECT_EQ(r.name(), "hoge");
 		} else if (r.match_start("/hoge/fuga")) {
@@ -78,6 +98,14 @@ TEST(XML, XML2)
 		  EXPECT_EQ(r.name(), "hoge");
 		}
 	}
+	trace.expect(r, {
+		"start /hoge",
+		"start /hoge/fuga",
+		"text /hoge/fuga",
+		"text /hoge/fuga",
+		"end /hoge/fuga",
+		"end /hoge",
+	});
 }
 
 TEST(XML, XML3)
@@ -85,7 +113,8 @@ TEST(XML, XML3)
 	std::string xml = R"---(<hoge><fuga foo='bar' baz="&lt;&amp;&gt;">He<!--llo, wor-->ld</fuga></hoge>)---";
 
 	xstream::Reader r(xml);
-	while (r.next()) {
+	test_support::EventTrace trace(true);
+	while (trace.next(&r)) {
 		if (r.match_start("/hoge")) {
 			EXPECT_EQ(r.name(), "hoge");
 		} else if (r.match_start("/hoge/fuga")) {
@@ -100,6 +129,15 @@ TEST(XML, XML3)
 		  EXPECT_EQ(r.name(), "hoge");
 		}
 	}
+	trace.expect(r, {
+		"start /hoge",
+		"start /hoge/fuga",
+		"text /hoge/fuga",
+		"comment /hoge/fuga",
+		"text /hoge/fuga",
+		"end /hoge/fuga",
+		"end /hoge",
+	});
 }
 
 TEST(XML, XML4)
@@ -107,7 +145,8 @@ TEST(XML, XML4)
 	std::string xml = R"---(<hoge>abc<fuga>def</fuga>ghi</hoge>)---";
 
 	xstream::Reader r(xml);
-	while (r.next()) {
+	test_support::EventTrace trace(true);
+	while (trace.next(&r)) {
 		if (r.match_start("/hoge")) {
 			EXPECT_EQ(r.name(), "hoge");
 		} else if (r.match_start("/hoge/fuga")) {
@@ -119,6 +158,15 @@ TEST(XML, XML4)
 		  EXPECT_EQ(r.text(), "abcghi");
 		}
 	}
+	trace.expect(r, {
+		"start /hoge",
+		"text /hoge",
+		"start /hoge/fuga",
+		"text /hoge/fuga",
+		"end /hoge/fuga",
+		"text /hoge",
+		"end /hoge",
+	});
 }
 
 TEST(XML, XML5)
@@ -126,7 +174,8 @@ TEST(XML, XML5)
 	std::string xml = R"---(<?xml version="1.0"?><hoge><fuga>Hello, world</fuga></hoge>)---";
 
 	xstream::Reader r(xml);
-	while (r.next()) {
+	test_support::EventTrace trace(true);
+	while (trace.next(&r)) {
 	  if (r.is_declaration()) {
 		EXPECT_EQ(r.name(), "?xml");
 		EXPECT_EQ(r.attribute("version", {}), "1.0");
@@ -140,6 +189,14 @@ TEST(XML, XML5)
 		EXPECT_EQ(r.name(), "hoge");
 	  }
 	}
+	trace.expect(r, {
+		"declaration /?xml",
+		"start /hoge",
+		"start /hoge/fuga",
+		"text /hoge/fuga",
+		"end /hoge/fuga",
+		"end /hoge",
+	});
 }
 
 class Node {
@@ -176,7 +233,7 @@ public:
 	{
 		return children_.size();
 	}
-	Node & operator[](size_t i)
+	Node const & operator[](size_t i) const
 	{
 		return *children_[i];
 	}
@@ -239,7 +296,8 @@ TEST(XML, XML6)
 	Node tree(Node::Root, "root");
 
 	xstream::Reader r(xml);
-	while (r.next()) {
+	test_support::EventTrace trace(false);
+	while (trace.next(&r)) {
 		if (r.match_start("/tree/drive")) {
 			auto ParseTree = [&](auto self, Node *parent)->void{
 				r.nest();
@@ -259,11 +317,11 @@ TEST(XML, XML6)
 						int64_t size = std::strtoll(r.attribute("size", "0").c_str(), nullptr, 10);
 						auto *p = parent->add_child({type, name, size});
 						if (type == Node::Dir || type == Node::Drive) {
-							if (!r.next()) break;
+							if (!trace.next(&r)) break;
 							self(self, p);
 						}
 					}
-				} while (r.next());
+				} while (trace.next(&r));
 			};
 			ParseTree(ParseTree, &tree);
 		}
@@ -286,7 +344,7 @@ TEST(XML, XML6)
 	ASSERT_EQ(tree[0][1].childs(), 1);
 	EXPECT_EQ(tree[0][1][0].type(), Node::Dir);
 	EXPECT_EQ(tree[0][1][0].name(), "Alice");
-	EXPECT_EQ(tree[0][1][0].childs(), 2);
+	ASSERT_EQ(tree[0][1][0].childs(), 2);
 	EXPECT_EQ(tree[0][1][0][0].type(), Node::File);
 	EXPECT_EQ(tree[0][1][0][0].name(), "document.txt");
 	EXPECT_EQ(tree[0][1][0][0].size(), 4096);
@@ -338,6 +396,59 @@ TEST(XML, XML6)
 	EXPECT_EQ(tree[2][1][0][0].type(), Node::File);
 	EXPECT_EQ(tree[2][1][0][0].name(), "movie.mp4");
 	EXPECT_EQ(tree[2][1][0][0].size(), 1048576000);
+	trace.expect(r, {
+		"declaration /?xml",
+		"start /tree",
+		"start /tree/drive",
+		"start /tree/drive/dir",
+		"start /tree/drive/dir/dir",
+		"start /tree/drive/dir/dir/file",
+		"end /tree/drive/dir/dir/file",
+		"end /tree/drive/dir/dir",
+		"start /tree/drive/dir/file",
+		"end /tree/drive/dir/file",
+		"end /tree/drive/dir",
+		"start /tree/drive/dir",
+		"start /tree/drive/dir/dir",
+		"start /tree/drive/dir/dir/file",
+		"end /tree/drive/dir/dir/file",
+		"start /tree/drive/dir/dir/file",
+		"end /tree/drive/dir/dir/file",
+		"end /tree/drive/dir/dir",
+		"end /tree/drive/dir",
+		"end /tree/drive",
+		"start /tree/drive",
+		"start /tree/drive/dir",
+		"start /tree/drive/dir/dir",
+		"start /tree/drive/dir/dir/dir",
+		"start /tree/drive/dir/dir/dir/file",
+		"end /tree/drive/dir/dir/dir/file",
+		"start /tree/drive/dir/dir/dir/file",
+		"end /tree/drive/dir/dir/dir/file",
+		"end /tree/drive/dir/dir/dir",
+		"end /tree/drive/dir/dir",
+		"start /tree/drive/dir/file",
+		"end /tree/drive/dir/file",
+		"end /tree/drive/dir",
+		"start /tree/drive/file",
+		"end /tree/drive/file",
+		"end /tree/drive",
+		"start /tree/drive",
+		"start /tree/drive/dir",
+		"start /tree/drive/dir/file",
+		"end /tree/drive/dir/file",
+		"start /tree/drive/dir/file",
+		"end /tree/drive/dir/file",
+		"end /tree/drive/dir",
+		"start /tree/drive/dir",
+		"start /tree/drive/dir/dir",
+		"start /tree/drive/dir/dir/file",
+		"end /tree/drive/dir/dir/file",
+		"end /tree/drive/dir/dir",
+		"end /tree/drive/dir",
+		"end /tree/drive",
+		"end /tree",
+	});
 }
 
 

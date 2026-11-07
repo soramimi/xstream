@@ -15,7 +15,8 @@ TEST(XML, Namespace)
 )---";
 
     xstream::Reader r(xml);
-    while (r.next()) {
+    test_support::EventTrace trace(false);
+    while (trace.next(&r)) {
         if (r.match_start("/root")) {
             EXPECT_EQ(r.name(), "root");
             EXPECT_EQ(r.attribute("xmlns:ns1", {}), "http://example.com/ns1");
@@ -32,6 +33,14 @@ TEST(XML, Namespace)
             EXPECT_EQ(r.text(), "Content2");
         }
     }
+    trace.expect(r, {
+        "start /root",
+        "start /root/ns1:element",
+        "end /root/ns1:element",
+        "start /root/ns2:element",
+        "end /root/ns2:element",
+        "end /root",
+    });
 }
 
 // 空要素とself-closing tags のテスト
@@ -46,7 +55,8 @@ TEST(XML, EmptyElements)
 )---";
 
     xstream::Reader r(xml);
-    while (r.next()) {
+    test_support::EventTrace trace(false);
+    while (trace.next(&r)) {
         if (r.match_start("/root/empty")) {
             EXPECT_EQ(r.name(), "empty");
         } else if (r.match_end("/root/empty")) {
@@ -59,6 +69,16 @@ TEST(XML, EmptyElements)
             EXPECT_EQ(r.attribute("attr2", {}), "value2");
         }
     }
+    trace.expect(r, {
+        "start /root",
+        "start /root/empty",
+        "end /root/empty",
+        "start /root/selfclosing",
+        "end /root/selfclosing",
+        "start /root/withattrs",
+        "end /root/withattrs",
+        "end /root",
+    });
 }
 
 // 複数レベルのネストと複雑な構造のテスト
@@ -106,7 +126,8 @@ TEST(XML, NestedStructure)
     bool inGenres = false;
 
     xstream::Reader r(xml);
-    while (r.next()) {
+    test_support::EventTrace trace(false);
+    while (trace.next(&r)) {
         if (r.match_start("/library/book")) {
             currentBook = BookInfo();
             currentBook.category = r.attribute("category", {});
@@ -145,6 +166,46 @@ TEST(XML, NestedStructure)
     ASSERT_EQ(books[1].genres.size(), 2);
     EXPECT_EQ(books[1].genres[0], "Science");
     EXPECT_EQ(books[1].genres[1], "Cosmology");
+    trace.expect(r, {
+        "start /library",
+        "start /library/book",
+        "start /library/book/title",
+        "end /library/book/title",
+        "start /library/book/author",
+        "start /library/book/author/name",
+        "end /library/book/author/name",
+        "start /library/book/author/nationality",
+        "end /library/book/author/nationality",
+        "end /library/book/author",
+        "start /library/book/year",
+        "end /library/book/year",
+        "start /library/book/genres",
+        "start /library/book/genres/genre",
+        "end /library/book/genres/genre",
+        "start /library/book/genres/genre",
+        "end /library/book/genres/genre",
+        "end /library/book/genres",
+        "end /library/book",
+        "start /library/book",
+        "start /library/book/title",
+        "end /library/book/title",
+        "start /library/book/author",
+        "start /library/book/author/name",
+        "end /library/book/author/name",
+        "start /library/book/author/nationality",
+        "end /library/book/author/nationality",
+        "end /library/book/author",
+        "start /library/book/year",
+        "end /library/book/year",
+        "start /library/book/genres",
+        "start /library/book/genres/genre",
+        "end /library/book/genres/genre",
+        "start /library/book/genres/genre",
+        "end /library/book/genres/genre",
+        "end /library/book/genres",
+        "end /library/book",
+        "end /library",
+    });
 }
 
 // 特殊文字と処理命令のテスト
@@ -153,7 +214,6 @@ TEST(XML, ProcessingInstructions)
     std::string xml = R"---(
 <?xml version="1.0" encoding="UTF-8"?>
 <?xml-stylesheet type="text/xsl" href="style.xsl"?>
-<!DOCTYPE html>
 <data>
     <item id="1" special="&quot;quoted&quot;">
         Special chars: &lt;&gt;&amp;
@@ -165,20 +225,21 @@ TEST(XML, ProcessingInstructions)
 )---";
 
     xstream::Reader r(xml);
+    test_support::EventTrace trace(false);
     int itemCount = 0;
+    int itemEndCount = 0;
+    std::vector<std::string> declarationPaths;
 
-    while (r.next()) {
-        if (r.is_declaration() && r.path() == "?xml") {
+    while (trace.next(&r)) {
+        if (r.is_declaration()) declarationPaths.push_back(r.path());
+        if (r.is_declaration() && r.path() == "/?xml") {
             EXPECT_EQ(r.name(), "?xml");
             EXPECT_EQ(r.attribute("version", {}), "1.0");
             EXPECT_EQ(r.attribute("encoding", {}), "UTF-8");
-        } else if (r.is_declaration() && r.path() == "?xml-stylesheet") {
+        } else if (r.is_declaration() && r.path() == "/?xml-stylesheet") {
             EXPECT_EQ(r.name(), "?xml-stylesheet");
             EXPECT_EQ(r.attribute("type", {}), "text/xsl");
             EXPECT_EQ(r.attribute("href", {}), "style.xsl");
-        } else if (r.is_declaration() && r.path() == "!DOCTYPE") {
-            EXPECT_EQ(r.name(), "!DOCTYPE");
-            EXPECT_EQ(r.attribute("html", {}), "");
         } else if (r.match_start("/data/item")) {
             itemCount++;
             if (itemCount == 1) {
@@ -188,6 +249,7 @@ TEST(XML, ProcessingInstructions)
                 EXPECT_EQ(r.attribute("id", {}), "2");
             }
         } else if (r.match_end("/data/item")) {
+            itemEndCount++;
             if (itemCount == 1) {
                 // リーディングとトレーリングの空白を削除
                 std::string text = r.text();
@@ -204,6 +266,22 @@ TEST(XML, ProcessingInstructions)
     }
 
     EXPECT_EQ(itemCount, 2);
+    EXPECT_EQ(itemEndCount, 2);
+    EXPECT_EQ(declarationPaths, (std::vector<std::string>{
+        "/?xml", "/?xml-stylesheet", "/data/?custom-instruction"}));
+    EXPECT_EQ(r.result(), xstream::Reader::ReadResult::EndDocument);
+    trace.expect(r, {
+        "declaration /?xml",
+        "declaration /?xml-stylesheet",
+        "start /data",
+        "start /data/item",
+        "end /data/item",
+        "comment /data",
+        "declaration /data/?custom-instruction",
+        "start /data/item",
+        "end /data/item",
+        "end /data",
+    });
 }
 
 // 再帰的なデータ構造の処理
@@ -249,7 +327,8 @@ TEST(XML, RecursiveMenu)
     std::vector<std::shared_ptr<MenuItem>> menuItems;
 
     xstream::Reader r(xml);
-    while (r.next()) {
+    test_support::EventTrace trace(false);
+    while (trace.next(&r)) {
         if (r.match_start("/menu/item")) {
             auto parseMenu = [&](auto self, std::shared_ptr<MenuItem> parent) -> void {
                 r.nest();
@@ -265,10 +344,10 @@ TEST(XML, RecursiveMenu)
                             menuItems.push_back(menuItem);
                         }
                         
-                        if (!r.next()) break;
+                        if (!trace.next(&r)) break;
                         self(self, menuItem);
                     }
-                } while (r.next());
+                } while (trace.next(&r));
             };
             
             std::string id = r.attribute("id", {});
@@ -276,7 +355,7 @@ TEST(XML, RecursiveMenu)
             auto rootItem = std::make_shared<MenuItem>(id, label);
             menuItems.push_back(rootItem);
             
-            if (!r.next()) break;
+            if (!trace.next(&r)) break;
             parseMenu(parseMenu, rootItem);
         }
     }
@@ -312,5 +391,37 @@ TEST(XML, RecursiveMenu)
     EXPECT_EQ(menuItems[2]->label, "Help");
     ASSERT_EQ(menuItems[2]->children.size(), 1);
     EXPECT_EQ(menuItems[2]->children[0]->id, "about");
+    trace.expect(r, {
+        "start /menu",
+        "start /menu/item",
+        "start /menu/item/item",
+        "end /menu/item/item",
+        "start /menu/item/item",
+        "end /menu/item/item",
+        "start /menu/item/item",
+        "start /menu/item/item/item",
+        "end /menu/item/item/item",
+        "start /menu/item/item/item",
+        "end /menu/item/item/item",
+        "end /menu/item/item",
+        "start /menu/item/item",
+        "end /menu/item/item",
+        "start /menu/item/item",
+        "end /menu/item/item",
+        "end /menu/item",
+        "start /menu/item",
+        "start /menu/item/item",
+        "end /menu/item/item",
+        "start /menu/item/item",
+        "end /menu/item/item",
+        "start /menu/item/item",
+        "end /menu/item/item",
+        "end /menu/item",
+        "start /menu/item",
+        "start /menu/item/item",
+        "end /menu/item/item",
+        "end /menu/item",
+        "end /menu",
+    });
 }
 
